@@ -60,12 +60,22 @@ Two modes:
   the captain about ahead of time. NOT authoritative — always re-run
   `--mode final` once the real deadline passes to confirm.
 
-Output: projects each of the 16 members' GW score (sum of `ep_next` over
-their 11 starters, captain doubled, chip-adjusted per SKLW's rule above),
-then suggests a lineup — top 2 scorers → Strikers, next → GK, next 11 →
-Squad, bottom 2 → Bench. (Both Strikers and GK want HIGH projected
-scorers, since both roles are rewarded for outscoring the opponent, not
-for hiding a weak link.)
+Output: projects each of the 16 members' GW score (sum of projected points
+over their 11 starters, captain doubled, chip-adjusted per SKLW's rule
+above), then suggests a lineup — top 2 scorers → Strikers, next → GK,
+next 11 → Squad, bottom 2 → Bench. (Both Strikers and GK want HIGH
+projected scorers, since both roles are rewarded for outscoring the
+opponent, not for hiding a weak link.)
+
+By default the projected points come from FPL's own `ep_next` field.
+`--projections path/to/solio.csv` swaps that out for a Solio-style
+projections CSV instead (`Pos,ID,Name,BV,SV,Team,1_xMins,...,10_xMins,
+1_Pts,...,10_Pts`) — it matches players by name (Solio's `Name` column is
+FPL's short "web_name", e.g. `Saka`, `J.Timber`) + team, since Solio's own
+`ID` column is its own internal numbering, not the FPL element ID. Uses
+the `1_Pts` column (projection for the next upcoming GW). Anyone in the
+squad that the CSV doesn't match falls back to `ep_next` automatically,
+with a warning listing what didn't match so you can sanity-check it.
 
 `--lookup "name fragment"` searches FPL's bootstrap player list and
 prints element IDs — for building `overrides.json` without having to

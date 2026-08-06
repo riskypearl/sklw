@@ -39,6 +39,7 @@ not your weakest).
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -117,9 +118,43 @@ def get_manager_picks(manager_id: int, gw: int) -> dict | None:
         return None
 
 
-def project_manager_score(picks_data: dict, players: dict[int, dict]) -> float:
-    """Sum ep_next over the 11 starters, captain doubled, adjusted for
-    chips per SKLW's own rule: BB drops the bench, TC deducts a third of
+def ep_next_points(players: dict[int, dict]) -> dict[int, float]:
+    """Default projection source: FPL's own ep_next field per element ID."""
+    return {pid: float(p.get("ep_next") or 0.0) for pid, p in players.items()}
+
+
+def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
+    """Maps a Solio-style projections CSV (Pos,ID,Name,BV,SV,Team,1_xMins...,
+    1_Pts...,10_Pts) onto FPL element IDs, keyed by the '1_Pts' column (next
+    upcoming GW). Solio's own 'ID' column is its own internal numbering, not
+    the FPL element ID, and 'Name' is FPL's short web_name -- so name+team is
+    the only reliable join key back to bootstrap's player list."""
+    team_names = {t["id"]: t["name"] for t in bootstrap["teams"]}
+    by_name_team: dict[tuple[str, str], list[int]] = {}
+    for p in bootstrap["elements"]:
+        key = (p["web_name"].strip().lower(), team_names.get(p["team"], "").strip().lower())
+        by_name_team.setdefault(key, []).append(p["id"])
+
+    points: dict[int, float] = {}
+    unmatched = []
+    with csv_path.open(newline="", encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            key = (row["Name"].strip().lower(), row["Team"].strip().lower())
+            matches = by_name_team.get(key, [])
+            if len(matches) != 1:
+                unmatched.append(row["Name"])
+                continue
+            points[matches[0]] = float(row["1_Pts"])
+    if unmatched:
+        shown = ", ".join(unmatched[:10]) + (" ..." if len(unmatched) > 10 else "")
+        print(f"WARNING: {len(unmatched)} CSV row(s) didn't match a unique "
+              f"FPL player by name+team, skipped: {shown}")
+    return points
+
+
+def project_manager_score(picks_data: dict, points: dict[int, float]) -> float:
+    """Sum projected points over the 11 starters, captain doubled, adjusted
+    for chips per SKLW's own rule: BB drops the bench, TC deducts a third of
     the captain's score (since SKLW doesn't want chip effects skewing the
     inter-club scoring)."""
     picks = picks_data["picks"]
@@ -127,22 +162,21 @@ def project_manager_score(picks_data: dict, players: dict[int, dict]) -> float:
 
     starters = [p for p in picks if p["multiplier"] > 0 or chip == "bboost"]
     total = 0.0
-    captain_ep = 0.0
+    captain_pts = 0.0
     for p in starters:
-        el = players.get(p["element"])
-        if not el:
+        pts = points.get(p["element"])
+        if pts is None:
             continue
-        ep = float(el.get("ep_next") or 0.0)
         mult = p["multiplier"] if p["multiplier"] > 0 else 1  # bboost includes bench at x1
-        total += ep * mult
+        total += pts * mult
         if p["is_captain"]:
-            captain_ep = ep * mult
+            captain_pts = pts * mult
 
     if chip == "3xc":
         # TC already applied x3 via multiplier above; SKLW rule: deduct a
         # third of the (already-tripled) captain score, leaving the
         # equivalent of a normal x2 captain for scoring purposes.
-        total -= captain_ep / 3
+        total -= captain_pts / 3
     return round(total, 2)
 
 
@@ -290,6 +324,12 @@ def main():
                           "suggested lineup (GK faces both opponent "
                           "Strikers, so a big/hard-to-project FH score is "
                           "worth more there). Repeat for multiple managers.")
+    ap.add_argument("--projections", metavar="CSV_PATH",
+                     help="path to a Solio-style projections CSV "
+                          "(Pos,ID,Name,BV,SV,Team,1_xMins...,1_Pts...) to "
+                          "score with instead of FPL's ep_next. Matched to "
+                          "FPL players by name+team. Any player not found "
+                          "in the CSV falls back to ep_next.")
     args = ap.parse_args()
 
     print_banner()
@@ -326,6 +366,14 @@ def main():
         member_name, _ = resolve_manager(raw)
         fh_names.add(member_name)
 
+    points = ep_next_points(players)
+    if args.projections:
+        solio_points = load_solio_projections(Path(args.projections), bootstrap)
+        print(f"Loaded {len(solio_points)} player projection(s) from "
+              f"{args.projections} (falling back to ep_next for anyone not "
+              f"matched)")
+        points.update(solio_points)
+
     last_finished_gw, next_gw = current_and_next_gw(bootstrap)
     print(f"Last finished GW: {last_finished_gw}, projecting for GW: {next_gw}")
 
@@ -359,7 +407,7 @@ def main():
         if args.mode == "preview" and str(mid) in overrides:
             picks_data = apply_overrides(picks_data, overrides[str(mid)])
 
-        score = project_manager_score(picks_data, players)
+        score = project_manager_score(picks_data, points)
         print(f"  {name} (GW{gw_used} squad): projected {score}")
         scores.append((name, score))
 
