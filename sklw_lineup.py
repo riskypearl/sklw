@@ -1,0 +1,267 @@
+"""SKLW (Strikers, Keepers, Losers, Weepers) club lineup helper.
+
+Standalone script -- no dependency on the fpl-model/Axiom project, run it
+directly with `python sklw_lineup.py`. Uses only the public FPL API plus
+FPL's own `ep_next` (expected points next GW) field for projections, so it
+needs no separate model.
+
+Two modes:
+
+  --mode preview   Pre-deadline. Pulls each manager's LAST COMPLETED GW
+                    squad (the only thing publicly visible before the
+                    deadline) and lets you apply manual overrides for any
+                    known/expected transfers via overrides.json, before
+                    projecting. Good for an early decision when you can't
+                    wait for the real deadline.
+
+  --mode final      Post-deadline. Pulls everyone's actual, now-public,
+                    locked-in picks for the CURRENT gameweek straight from
+                    the API -- no manual input, fully authoritative. Run
+                    this once the real FPL deadline passes.
+
+Setup:
+  1. Fill in MANAGER_IDS below (or pass --ids-file with one ID per line).
+  2. (Optional, preview mode only) create overrides.json:
+       {
+         "1234567": {"out": [123, 456], "in": [789, 101]}
+       }
+     where the numbers are FPL player element IDs (not names) -- out/in
+     lists must be the same length. Look player IDs up in bootstrap-static
+     ("elements") if needed; the script prints a small player-name lookup
+     helper at the bottom to make this easier interactively.
+
+Output: a suggested SKLW lineup -- 2 Strikers, 1 GK, 11 Squad, 2 Bench --
+ranked by projected GW score (both Strikers and GK reward being HIGH:
+strikers win by outscoring the opponent's GK, your GK wins by outscoring/
+tying the opponent's strikers -- so your top scorers go to those roles,
+not your weakest).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import requests
+
+FPL_BASE = "https://fantasy.premierleague.com/api"
+
+# --- Fill in once the club has picked a name ---
+CLUB_NAME = ""
+
+# --- Fill these in with your 16 club members' real FPL manager/entry IDs ---
+# (the number in https://fantasy.premierleague.com/entry/<ID>/ ...)
+MANAGER_IDS: dict[str, int] = {
+    "az": 26099,
+    "Classiic": 10,
+    "Cyclones": 137079,
+    "farhan": 631,
+    "Harv": 4190,
+    "Heisen": 1230,
+    "kb2": 7878,
+    "Mahmoud": 6227,
+    "Mordo": 32082,
+    "neB": 1231,
+    "nokah": 62,
+    "riskypearl": 8052,
+    "smooth": 653,
+    "Stxddy": 625,
+    "tyh": 650,
+    "vrawn": 4,
+}
+
+
+def print_banner() -> None:
+    """Printed on every run so it's always obvious which club/roster this
+    copy of the script is wired to before it does anything else."""
+    name = CLUB_NAME or "(name TBD)"
+    print(f"=== SKLW Lineup Tool -- {name} ===")
+    print(f"{len(MANAGER_IDS)} club members:")
+    for member_name, mid in MANAGER_IDS.items():
+        print(f"  {mid:>7}  {member_name}")
+    print()
+
+
+def get_json(url: str) -> dict:
+    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+
+def load_bootstrap() -> dict:
+    return get_json(f"{FPL_BASE}/bootstrap-static/")
+
+
+def current_and_next_gw(bootstrap: dict) -> tuple[int, int]:
+    """Returns (last_finished_gw, gw_to_project) from bootstrap events."""
+    events = bootstrap["events"]
+    finished = [e for e in events if e["finished"]]
+    next_ev = next((e for e in events if e["is_next"]), None)
+    last_finished_id = finished[-1]["id"] if finished else 0
+    next_id = next_ev["id"] if next_ev else last_finished_id + 1
+    return last_finished_id, next_id
+
+
+def player_lookup(bootstrap: dict) -> dict[int, dict]:
+    return {p["id"]: p for p in bootstrap["elements"]}
+
+
+def get_manager_picks(manager_id: int, gw: int) -> dict | None:
+    """Public API only returns picks for a GW once its deadline has passed.
+    Returns None (not raises) if not available yet -- callers fall back to
+    the last completed GW instead."""
+    try:
+        return get_json(f"{FPL_BASE}/entry/{manager_id}/event/{gw}/picks/")
+    except requests.HTTPError:
+        return None
+
+
+def project_manager_score(picks_data: dict, players: dict[int, dict]) -> float:
+    """Sum ep_next over the 11 starters, captain doubled, adjusted for
+    chips per SKLW's own rule: BB drops the bench, TC deducts a third of
+    the captain's score (since SKLW doesn't want chip effects skewing the
+    inter-club scoring)."""
+    picks = picks_data["picks"]
+    chip = picks_data.get("active_chip")  # "bboost", "3xc", "wildcard", "freehit", or None
+
+    starters = [p for p in picks if p["multiplier"] > 0 or chip == "bboost"]
+    total = 0.0
+    captain_ep = 0.0
+    for p in starters:
+        el = players.get(p["element"])
+        if not el:
+            continue
+        ep = float(el.get("ep_next") or 0.0)
+        mult = p["multiplier"] if p["multiplier"] > 0 else 1  # bboost includes bench at x1
+        total += ep * mult
+        if p["is_captain"]:
+            captain_ep = ep * mult
+
+    if chip == "3xc":
+        # TC already applied x3 via multiplier above; SKLW rule: deduct a
+        # third of the (already-tripled) captain score, leaving the
+        # equivalent of a normal x2 captain for scoring purposes.
+        total -= captain_ep / 3
+    return round(total, 2)
+
+
+def apply_overrides(picks_data: dict, override: dict) -> dict:
+    """Swap 'out' element IDs for 'in' element IDs, same slot/multiplier --
+    a simple like-for-like patch for preview mode. Captaincy/multiplier of
+    the outgoing player carries over to the incoming one at the same slot."""
+    picks = [dict(p) for p in picks_data["picks"]]
+    out_ids = override.get("out", [])
+    in_ids = override.get("in", [])
+    if len(out_ids) != len(in_ids):
+        raise ValueError("overrides.json: 'out' and 'in' lists must be the same length")
+    swap = dict(zip(out_ids, in_ids))
+    for p in picks:
+        if p["element"] in swap:
+            p["element"] = swap[p["element"]]
+    return {**picks_data, "picks": picks}
+
+
+def suggest_lineup(scores: list[tuple[str, float]]) -> None:
+    """scores: [(manager_name, projected_score), ...]. Prints a suggested
+    SKLW role assignment -- top scorers to Strikers+GK (both roles reward
+    being high), rest fill the 11-a-side squad, bottom 2 benched."""
+    ranked = sorted(scores, key=lambda x: -x[1])
+    if len(ranked) < 15:
+        print(f"WARNING: only {len(ranked)} managers with data (need 15) -- "
+              f"suggestion below is incomplete.")
+
+    strikers = ranked[0:2]
+    gk = ranked[2:3]
+    squad = ranked[3:14]
+    bench = ranked[14:16]
+
+    print("\n=== Suggested SKLW lineup ===")
+    print("\nStrikers (want HIGH -- beat opponent's GK):")
+    for name, sc in strikers:
+        print(f"  {name}: {sc}")
+    print("\nGoalkeeper (want HIGH -- beat opponent's 2 strikers):")
+    for name, sc in gk:
+        print(f"  {name}: {sc}")
+    print("\nSquad (11, sum vs opponent's 11):")
+    for name, sc in squad:
+        print(f"  {name}: {sc}")
+    print(f"  --> squad total: {sum(sc for _, sc in squad):.2f}")
+    print("\nBench (2, does not count):")
+    for name, sc in bench:
+        print(f"  {name}: {sc}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--mode", choices=["preview", "final"], default="final")
+    ap.add_argument("--overrides", default="overrides.json",
+                     help="path to overrides.json (preview mode only)")
+    ap.add_argument("--lookup", metavar="NAME_FRAGMENT",
+                     help="instead of running, search bootstrap players by "
+                          "name fragment and print their element IDs (for "
+                          "building overrides.json)")
+    args = ap.parse_args()
+
+    print_banner()
+
+    print("Fetching bootstrap-static...")
+    bootstrap = load_bootstrap()
+    players = player_lookup(bootstrap)
+
+    if args.lookup:
+        frag = args.lookup.lower()
+        matches = [p for p in bootstrap["elements"]
+                   if frag in f"{p['first_name']} {p['second_name']}".lower()]
+        for p in matches[:25]:
+            print(f"  {p['id']:>6}  {p['first_name']} {p['second_name']} "
+                  f"({p['team']}) ep_next={p.get('ep_next')}")
+        return
+
+    if not MANAGER_IDS:
+        print("ERROR: fill in MANAGER_IDS at the top of this script first "
+              "(name -> FPL manager ID for all 16 club members).")
+        sys.exit(1)
+
+    last_finished_gw, next_gw = current_and_next_gw(bootstrap)
+    print(f"Last finished GW: {last_finished_gw}, projecting for GW: {next_gw}")
+
+    overrides = {}
+    if args.mode == "preview":
+        ov_path = Path(args.overrides)
+        if ov_path.exists():
+            overrides = json.loads(ov_path.read_text())
+            print(f"Loaded {len(overrides)} manual override(s) from {ov_path}")
+        else:
+            print(f"No overrides file at {ov_path} -- using last-known squads as-is.")
+
+    scores: list[tuple[str, float]] = []
+    for name, mid in MANAGER_IDS.items():
+        picks_data = None
+        gw_used = None
+        if args.mode == "final":
+            picks_data = get_manager_picks(mid, next_gw)
+            gw_used = next_gw
+            if picks_data is None:
+                print(f"  {name}: GW{next_gw} picks not public yet "
+                      f"(deadline hasn't passed) -- falling back to GW{last_finished_gw}")
+        if picks_data is None:
+            picks_data = get_manager_picks(mid, last_finished_gw)
+            gw_used = last_finished_gw
+
+        if picks_data is None:
+            print(f"  {name}: could not fetch picks at all (bad manager ID?), skipping")
+            continue
+
+        if args.mode == "preview" and str(mid) in overrides:
+            picks_data = apply_overrides(picks_data, overrides[str(mid)])
+
+        score = project_manager_score(picks_data, players)
+        print(f"  {name} (GW{gw_used} squad): projected {score}")
+        scores.append((name, score))
+
+    suggest_lineup(scores)
+
+
+if __name__ == "__main__":
+    main()
