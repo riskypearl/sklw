@@ -105,10 +105,10 @@ Repeat the flag for multiple managers on FH the same week; only one can
 actually take the GK slot (the higher-projected of them), the rest stay
 in the normal pool with a note printed.
 
-Every run also prints a banner up front with the club name (blank until
-the club picks one — edit `CLUB_NAME` at the top of the script) and the
-full roster of member names → FPL manager IDs, so it's always obvious
-which club/roster a given run is using.
+Every run also prints a banner up front with the club name ("Algorithm
+and Blues" — edit `CLUB_NAME` at the top of the script if this changes)
+and the full roster of member names → FPL manager IDs, so it's always
+obvious which club/roster a given run is using.
 
 ## Setup
 
@@ -161,5 +161,3 @@ Already filled into `MANAGER_IDS` at the top of `sklw_lineup.py`.
 - `overrides.json` format is a first draft (out/in element ID lists) —
   untested for usability; may want a name-based format instead once used
   for real (the `--lookup` helper exists as a stopgap for this).
-- Club name (`CLUB_NAME` in `sklw_lineup.py`) is still blank — fill in
-  once decided.

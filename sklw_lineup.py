@@ -49,7 +49,7 @@ import requests
 FPL_BASE = "https://fantasy.premierleague.com/api"
 
 # --- Fill in once the club has picked a name ---
-CLUB_NAME = ""
+CLUB_NAME = "Algorithm and Blues"
 
 # --- Fill these in with your 16 club members' real FPL manager/entry IDs ---
 # (the number in https://fantasy.premierleague.com/entry/<ID>/ ...)
