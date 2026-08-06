@@ -82,6 +82,19 @@ Multiple players in one transfer: comma-separate them, e.g.
 Run it again for each new transfer as members report them in — it
 accumulates in `overrides.json` rather than overwriting.
 
+`--fh "Manager Name"` marks a club member as playing Free Hit this GW
+and forces them into the suggested lineup's GK slot, regardless of their
+computed score. Reasoning: a GK faces BOTH opposing Strikers individually
+(two separate H2H battles), while each Striker only faces the one
+opposing GK — so a GK slot gets double the H2H exposure of a Striker
+slot. Free Hit scores also get no chip adjustment (unlike Bench Boost or
+Triple Captain), so they count at full value, and FH scores are often
+high and hard to project accurately from someone's normal squad — so
+that upside is worth more landing in the slot with double exposure.
+Repeat the flag for multiple managers on FH the same week; only one can
+actually take the GK slot (the higher-projected of them), the rest stay
+in the normal pool with a note printed.
+
 Every run also prints a banner up front with the club name (blank until
 the club picks one — edit `CLUB_NAME` at the top of the script) and the
 full roster of member names → FPL manager IDs, so it's always obvious

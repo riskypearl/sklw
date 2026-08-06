@@ -213,19 +213,42 @@ def record_transfer(overrides_path: Path, bootstrap: dict, manager_name: str,
     print(f"Saved to {overrides_path}\n")
 
 
-def suggest_lineup(scores: list[tuple[str, float]]) -> None:
+def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = None) -> None:
     """scores: [(manager_name, projected_score), ...]. Prints a suggested
     SKLW role assignment -- top scorers to Strikers+GK (both roles reward
-    being high), rest fill the 11-a-side squad, bottom 2 benched."""
+    being high), rest fill the 11-a-side squad, bottom 2 benched.
+
+    fh_names: managers on Free Hit this GW are forced into the GK slot --
+    GK faces BOTH opposing Strikers individually (two H2H battles vs a
+    Striker's one), so a high/hard-to-project FH score is worth more
+    there than anywhere else, and FH gets no chip score adjustment so it
+    counts at full value."""
+    fh_names = fh_names or set()
     ranked = sorted(scores, key=lambda x: -x[1])
     if len(ranked) < 15:
         print(f"WARNING: only {len(ranked)} managers with data (need 15) -- "
               f"suggestion below is incomplete.")
 
-    strikers = ranked[0:2]
-    gk = ranked[2:3]
-    squad = ranked[3:14]
-    bench = ranked[14:16]
+    fh_present = [ns for ns in ranked if ns[0] in fh_names]
+    fh_gk = max(fh_present, key=lambda x: x[1]) if fh_present else None
+    if fh_gk:
+        others = [n for n, _ in fh_present if n != fh_gk[0]]
+        if others:
+            print(f"NOTE: also on Free Hit but only 1 GK slot exists, "
+                  f"left in the normal pool: {', '.join(others)}")
+        print(f"NOTE: {fh_gk[0]} is on Free Hit this GW -- forced into GK "
+              f"(GK faces both opponent Strikers, double the H2H exposure "
+              f"of a Striker slot, so a big FH score is worth more there).")
+        pool = [ns for ns in ranked if ns[0] != fh_gk[0]]
+        strikers = pool[0:2]
+        gk = [fh_gk]
+        squad = pool[2:13]
+        bench = pool[13:15]
+    else:
+        strikers = ranked[0:2]
+        gk = ranked[2:3]
+        squad = ranked[3:14]
+        bench = ranked[14:16]
 
     print("\n=== Suggested SKLW lineup ===")
     print("\nStrikers (want HIGH -- beat opponent's GK):")
@@ -261,6 +284,12 @@ def main():
     ap.add_argument("--in", dest="in_", help="comma-separated player name "
                                    "fragment(s) being transferred in, same "
                                    "order as --out (with --transfer)")
+    ap.add_argument("--fh", action="append", metavar="MANAGER_NAME",
+                     help="mark this club member as playing Free Hit this "
+                          "GW -- forces them into the GK slot in the "
+                          "suggested lineup (GK faces both opponent "
+                          "Strikers, so a big/hard-to-project FH score is "
+                          "worth more there). Repeat for multiple managers.")
     args = ap.parse_args()
 
     print_banner()
@@ -291,6 +320,11 @@ def main():
         print("ERROR: fill in MANAGER_IDS at the top of this script first "
               "(name -> FPL manager ID for all 16 club members).")
         sys.exit(1)
+
+    fh_names = set()
+    for raw in args.fh or []:
+        member_name, _ = resolve_manager(raw)
+        fh_names.add(member_name)
 
     last_finished_gw, next_gw = current_and_next_gw(bootstrap)
     print(f"Last finished GW: {last_finished_gw}, projecting for GW: {next_gw}")
@@ -329,7 +363,7 @@ def main():
         print(f"  {name} (GW{gw_used} squad): projected {score}")
         scores.append((name, score))
 
-    suggest_lineup(scores)
+    suggest_lineup(scores, fh_names)
 
 
 if __name__ == "__main__":
