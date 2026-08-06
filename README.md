@@ -71,6 +71,17 @@ for hiding a weak link.)
 prints element IDs — for building `overrides.json` without having to
 know player IDs by heart.
 
+`--transfer "Manager Name" --out "player" --in "player"` is the normal
+way to record a transfer once a club member tells you about it (the API
+doesn't reveal real transfers until the deadline passes, which is too
+late for pre-deadline planning). It resolves both names, appends the
+swap to that member's entry in `overrides.json`, and immediately re-runs
+in `--mode preview` so you see the updated suggested lineup right away.
+Multiple players in one transfer: comma-separate them, e.g.
+`--out "Haaland,Saka" --in "Watkins,Salah"` (same order on both sides).
+Run it again for each new transfer as members report them in — it
+accumulates in `overrides.json` rather than overwriting.
+
 Every run also prints a banner up front with the club name (blank until
 the club picks one — edit `CLUB_NAME` at the top of the script) and the
 full roster of member names → FPL manager IDs, so it's always obvious

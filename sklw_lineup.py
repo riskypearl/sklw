@@ -162,6 +162,57 @@ def apply_overrides(picks_data: dict, override: dict) -> dict:
     return {**picks_data, "picks": picks}
 
 
+def resolve_manager(name: str) -> tuple[str, int]:
+    """Case-insensitive exact match against MANAGER_IDS' keys."""
+    for member_name, mid in MANAGER_IDS.items():
+        if member_name.lower() == name.lower():
+            return member_name, mid
+    print(f"ERROR: '{name}' isn't a known club member. Known names: "
+          f"{', '.join(MANAGER_IDS)}")
+    sys.exit(1)
+
+
+def resolve_players(bootstrap: dict, fragments: str) -> list[int]:
+    """Resolve a comma-separated list of name fragments to element IDs.
+    Each fragment must match exactly one player -- ambiguous or missing
+    matches abort with the candidate list so the user can be more specific,
+    rather than silently guessing which player was meant."""
+    ids = []
+    for frag in [f.strip() for f in fragments.split(",") if f.strip()]:
+        matches = [p for p in bootstrap["elements"]
+                   if frag.lower() in f"{p['first_name']} {p['second_name']}".lower()]
+        if len(matches) != 1:
+            print(f"ERROR: '{frag}' matched {len(matches)} players, need exactly 1:")
+            for p in matches[:10]:
+                print(f"  {p['id']:>6}  {p['first_name']} {p['second_name']}")
+            sys.exit(1)
+        ids.append(matches[0]["id"])
+    return ids
+
+
+def record_transfer(overrides_path: Path, bootstrap: dict, manager_name: str,
+                     manager_id: int, out_fragments: str, in_fragments: str) -> None:
+    """Resolves player names, appends the out/in pair to that manager's
+    entry in overrides.json (creating the file/entry if needed), and saves."""
+    out_ids = resolve_players(bootstrap, out_fragments)
+    in_ids = resolve_players(bootstrap, in_fragments)
+    if len(out_ids) != len(in_ids):
+        print("ERROR: --out and --in must list the same number of players")
+        sys.exit(1)
+
+    all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
+    entry = all_overrides.setdefault(str(manager_id), {"out": [], "in": []})
+    entry["out"].extend(out_ids)
+    entry["in"].extend(in_ids)
+    overrides_path.write_text(json.dumps(all_overrides, indent=2))
+
+    players = player_lookup(bootstrap)
+    out_names = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in out_ids)
+    in_names = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in in_ids)
+    print(f"Recorded transfer for {manager_name}: OUT [{out_names}] -> IN [{in_names}]")
+    print(f"Saved to {overrides_path}\n")
+
+
 def suggest_lineup(scores: list[tuple[str, float]]) -> None:
     """scores: [(manager_name, projected_score), ...]. Prints a suggested
     SKLW role assignment -- top scorers to Strikers+GK (both roles reward
@@ -201,6 +252,15 @@ def main():
                      help="instead of running, search bootstrap players by "
                           "name fragment and print their element IDs (for "
                           "building overrides.json)")
+    ap.add_argument("--transfer", metavar="MANAGER_NAME",
+                     help="record a transfer for this club member by name, "
+                          "then re-run --mode preview with it applied. "
+                          "Requires --out and --in.")
+    ap.add_argument("--out", help="comma-separated player name fragment(s) "
+                                   "being transferred out (with --transfer)")
+    ap.add_argument("--in", dest="in_", help="comma-separated player name "
+                                   "fragment(s) being transferred in, same "
+                                   "order as --out (with --transfer)")
     args = ap.parse_args()
 
     print_banner()
@@ -217,6 +277,15 @@ def main():
             print(f"  {p['id']:>6}  {p['first_name']} {p['second_name']} "
                   f"({p['team']}) ep_next={p.get('ep_next')}")
         return
+
+    if args.transfer:
+        if not args.out or not args.in_:
+            print("ERROR: --transfer requires both --out and --in")
+            sys.exit(1)
+        member_name, mid = resolve_manager(args.transfer)
+        record_transfer(Path(args.overrides), bootstrap, member_name, mid,
+                         args.out, args.in_)
+        args.mode = "preview"
 
     if not MANAGER_IDS:
         print("ERROR: fill in MANAGER_IDS at the top of this script first "
