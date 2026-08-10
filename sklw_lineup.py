@@ -42,6 +42,7 @@ import argparse
 import csv
 import json
 import sys
+import unicodedata
 from pathlib import Path
 
 import requests
@@ -123,28 +124,56 @@ def ep_next_points(players: dict[int, dict]) -> dict[int, float]:
     return {pid: float(p.get("ep_next") or 0.0) for pid, p in players.items()}
 
 
+# Letters like o/ø aren't accented variants of each other in Unicode (no
+# NFKD decomposition exists), just visually/phonetically similar -- so they
+# need an explicit translation table rather than accent-stripping alone.
+_EXTRA_FOLDS = str.maketrans({
+    "ø": "o", "Ø": "O", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE",
+    "ß": "ss", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L",
+})
+
+
+def _fold(s: str) -> str:
+    """Lowercase and strip accents/special letters, for lenient name/team
+    matching (handles 'Nørgaard' vs 'Norgaard'-style spelling differences
+    between sources)."""
+    s = s.translate(_EXTRA_FOLDS)
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return s.strip().lower()
+
+
 def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
     """Maps a Solio-style projections CSV (Pos,ID,Name,BV,SV,Team,1_xMins...,
     1_Pts...,10_Pts) onto FPL element IDs, keyed by the '1_Pts' column (next
     upcoming GW). Solio's own 'ID' column is its own internal numbering, not
-    the FPL element ID, and 'Name' is FPL's short web_name -- so name+team is
-    the only reliable join key back to bootstrap's player list."""
+    the FPL element ID, so matching is by name (FPL's short web_name) first
+    -- team is only used to disambiguate the rare case of two players
+    sharing a web_name, not required to match, since a promoted club's name
+    or a recent real-life transfer can make the two sources' 'Team' values
+    disagree even for an unambiguous, correctly-matched player."""
     team_names = {t["id"]: t["name"] for t in bootstrap["teams"]}
-    by_name_team: dict[tuple[str, str], list[int]] = {}
+    by_name: dict[str, list[dict]] = {}
     for p in bootstrap["elements"]:
-        key = (p["web_name"].strip().lower(), team_names.get(p["team"], "").strip().lower())
-        by_name_team.setdefault(key, []).append(p["id"])
+        by_name.setdefault(_fold(p["web_name"]), []).append(p)
 
     points: dict[int, float] = {}
     unmatched = []
     with csv_path.open(newline="", encoding="utf-8-sig") as f:
         for row in csv.DictReader(f):
-            key = (row["Name"].strip().lower(), row["Team"].strip().lower())
-            matches = by_name_team.get(key, [])
-            if len(matches) != 1:
-                unmatched.append(row["Name"])
+            candidates = by_name.get(_fold(row["Name"]), [])
+            if len(candidates) == 1:
+                points[candidates[0]["id"]] = float(row["1_Pts"])
                 continue
-            points[matches[0]] = float(row["1_Pts"])
+            if len(candidates) > 1:
+                csv_team = _fold(row["Team"])
+                narrowed = [p for p in candidates
+                            if csv_team in _fold(team_names.get(p["team"], ""))
+                            or _fold(team_names.get(p["team"], "")) in csv_team]
+                if len(narrowed) == 1:
+                    points[narrowed[0]["id"]] = float(row["1_Pts"])
+                    continue
+            unmatched.append(row["Name"])
     if unmatched:
         shown = ", ".join(unmatched[:10]) + (" ..." if len(unmatched) > 10 else "")
         print(f"WARNING: {len(unmatched)} CSV row(s) didn't match a unique "
