@@ -181,6 +181,57 @@ def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
     return points
 
 
+def pick_best_eleven(picks_data: dict, players: dict[int, dict],
+                      points: dict[int, float]) -> tuple[list[int], int | None]:
+    """Given a manager's full 15-man squad, picks the highest-projected
+    VALID starting XI (real FPL formation rules: 1 GK, 3-5 DEF, 2-5 MID,
+    1-3 FWD) rather than trusting their actual submitted starting-11 --
+    used by --best-xi to estimate each manager's best-possible score from
+    their real squad. Returns (starter_element_ids, captain_element_id)."""
+    by_pos: dict[int, list[tuple[float, int]]] = {1: [], 2: [], 3: [], 4: []}
+    for p in picks_data["picks"]:
+        el = players.get(p["element"])
+        if not el:
+            continue
+        by_pos[el["element_type"]].append((points.get(p["element"], 0.0), p["element"]))
+    for pos in by_pos:
+        by_pos[pos].sort(reverse=True)
+
+    gk = by_pos[1][0] if by_pos[1] else None
+    best_total = -1.0
+    best_outfield: list[tuple[float, int]] = []
+    for d in range(3, 6):
+        for m in range(2, 6):
+            f = 10 - d - m
+            if not (1 <= f <= 3):
+                continue
+            if d > len(by_pos[2]) or m > len(by_pos[3]) or f > len(by_pos[4]):
+                continue
+            combo = by_pos[2][:d] + by_pos[3][:m] + by_pos[4][:f]
+            total = sum(pts for pts, _ in combo)
+            if total > best_total:
+                best_total = total
+                best_outfield = combo
+
+    starters = ([gk] if gk else []) + best_outfield
+    captain = max(starters)[1] if starters else None
+    return [pid for _, pid in starters], captain
+
+
+def project_best_xi_score(picks_data: dict, players: dict[int, dict],
+                           points: dict[int, float]) -> float:
+    """Like project_manager_score, but ignores the manager's actual
+    submitted starting-11/captain and instead uses the highest-projected
+    valid XI from their real 15-man squad (see pick_best_eleven). A one-off
+    'what's their best possible score' estimate, not the authoritative
+    actual-picks score -- so chip adjustments aren't applied here."""
+    starter_ids, captain_id = pick_best_eleven(picks_data, players, points)
+    total = sum(points.get(pid, 0.0) for pid in starter_ids)
+    if captain_id is not None:
+        total += points.get(captain_id, 0.0)  # captain doubled
+    return round(total, 2)
+
+
 def project_manager_score(picks_data: dict, points: dict[int, float]) -> float:
     """Sum projected points over the 11 starters, captain doubled, adjusted
     for chips per SKLW's own rule: BB drops the bench, TC deducts a third of
@@ -359,6 +410,13 @@ def main():
                           "score with instead of FPL's ep_next. Matched to "
                           "FPL players by name+team. Any player not found "
                           "in the CSV falls back to ep_next.")
+    ap.add_argument("--best-xi", action="store_true",
+                     help="one-off comparison: ignore each manager's actual "
+                          "submitted starting-11/captain and instead score "
+                          "them using the highest-projected VALID XI (1 GK, "
+                          "3-5 DEF, 2-5 MID, 1-3 FWD) picked from their real "
+                          "15-man squad. Not the authoritative actual-picks "
+                          "score -- chip adjustments aren't applied.")
     args = ap.parse_args()
 
     print_banner()
@@ -436,7 +494,10 @@ def main():
         if args.mode == "preview" and str(mid) in overrides:
             picks_data = apply_overrides(picks_data, overrides[str(mid)])
 
-        score = project_manager_score(picks_data, points)
+        if args.best_xi:
+            score = project_best_xi_score(picks_data, players, points)
+        else:
+            score = project_manager_score(picks_data, points)
         print(f"  {name} (GW{gw_used} squad): projected {score}")
         scores.append((name, score))
 
