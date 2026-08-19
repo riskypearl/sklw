@@ -77,6 +77,16 @@ the `1_Pts` column (projection for the next upcoming GW). Anyone in the
 squad that the CSV doesn't match falls back to `ep_next` automatically,
 with a warning listing what didn't match so you can sanity-check it.
 
+`--best-xi` is a one-off comparison: instead of trusting each manager's
+actual submitted starting-11/captain, it scores them using the
+highest-projected VALID XI (real FPL formation rules — 1 GK, 3–5 DEF,
+2–5 MID, 1–3 FWD) picked from their real 15-man squad, captain = the
+highest-projected starter. Useful for a "what's everyone's best possible
+score right now" comparison across all 16 members. Not the authoritative
+actual-picks score, so chip adjustments aren't applied under this flag.
+Combine with `--projections` to base it on Solio's numbers instead of
+`ep_next`.
+
 `--lookup "name fragment"` searches FPL's bootstrap player list and
 prints element IDs — for building `overrides.json` without having to
 know player IDs by heart.
