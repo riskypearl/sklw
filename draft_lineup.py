@@ -26,41 +26,58 @@ import requests
 FPL_BASE = "https://fantasy.premierleague.com/api"
 
 # --- Transcribed from the league's draft board screenshot (2026-08) ---
-DRAFT_SQUADS: dict[str, list[str]] = {
+# Each entry is (player_name, team_short_code) -- the team code disambiguates
+# players who share a surname (e.g. there's more than one "Henderson" and
+# "Wilson" in the FPL player pool), same short codes shown in the screenshot.
+DRAFT_SQUADS: dict[str, list[tuple[str, str]]] = {
     "Axiom Analytics": [
-        "Haaland", "Rice", "O'Reilly", "Lammens", "Enzo", "Tavernier",
-        "Dewsbury-Hall", "J.Timber", "Canvot", "Garner", "Richards",
-        "Bijol", "McBurnie", "Awoniyi", "Henderson",
+        ("Haaland", "MCI"), ("Rice", "ARS"), ("O'Reilly", "MCI"),
+        ("Lammens", "MUN"), ("Enzo", "CHE"), ("Tavernier", "BOU"),
+        ("Dewsbury-Hall", "EVE"), ("J.Timber", "ARS"), ("Canvot", "CRY"),
+        ("Garner", "EVE"), ("Richards", "CRY"), ("Bijol", "LEE"),
+        ("McBurnie", "HUL"), ("Awoniyi", "COV"), ("Henderson", "CRY"),
     ],
     "AZFC": [
-        "B.Fernandes", "Anderson", "Havertz", "Buendía", "Gonzalo", "Hill",
-        "Calafiori", "Foden", "Palestra", "Collins", "Hinshelwood",
-        "Branthwaite", "Barry", "Sánchez", "Petrović",
+        ("B.Fernandes", "MUN"), ("Anderson", "MCI"), ("Havertz", "ARS"),
+        ("Buendía", "AVL"), ("Gonzalo", "FUL"), ("Hill", "BOU"),
+        ("Calafiori", "ARS"), ("Foden", "MCI"), ("Palestra", "CHE"),
+        ("Collins", "BRE"), ("Hinshelwood", "BHA"), ("Branthwaite", "EVE"),
+        ("Barry", "EVE"), ("Sánchez", "CHE"), ("Petrović", "BOU"),
     ],
     "Margem d'Erro": [
-        "Palmer", "Szoboszlai", "Mateta", "Šeško", "Tarkowski", "Schade",
-        "Sangaré", "Groß", "Van Hecke", "Vuskovic", "Diomande", "Pickford",
-        "Konsa", "N.Jackson", "Verbruggen",
+        ("Palmer", "CHE"), ("Szoboszlai", "LIV"), ("Mateta", "CRY"),
+        ("Šeško", "MUN"), ("Tarkowski", "EVE"), ("Schade", "BRE"),
+        ("Sangaré", "BRE"), ("Groß", "BHA"), ("Van Hecke", "TOT"),
+        ("Vuskovic", "BHA"), ("Diomande", "NFO"), ("Pickford", "EVE"),
+        ("Konsa", "AVL"), ("N.Jackson", "CHE"), ("Verbruggen", "BHA"),
     ],
     "AnB Heisenteam": [
-        "Isak", "Gibbs-White", "Wirtz", "Wissa", "Pedro Porro", "Osula",
-        "Truffert", "Cherki", "N.Williams", "Scott", "Thiaw", "Jacquet",
-        "A.Becker", "Bruno G.", "Trafford",
+        ("Isak", "LIV"), ("Gibbs-White", "NFO"), ("Wirtz", "LIV"),
+        ("Wissa", "NEW"), ("Pedro Porro", "TOT"), ("Osula", "NEW"),
+        ("Truffert", "BOU"), ("Cherki", "MCI"), ("N.Williams", "NFO"),
+        ("Scott", "BOU"), ("Thiaw", "NEW"), ("Jacquet", "LIV"),
+        ("A.Becker", "LIV"), ("Bruno G.", "ARS"), ("Trafford", "LEE"),
     ],
     "Harven FC": [
-        "Gabriel", "Calvert-Lewin", "Virgil", "Raya", "Sarr", "Brobbey",
-        "Muñoz", "Marmoush", "Wilson", "Fernandes", "Colwill", "Roefs",
-        "Kluivert", "Van de Ven", "Ødegaard",
+        ("Gabriel", "ARS"), ("Calvert-Lewin", "LEE"), ("Virgil", "LIV"),
+        ("Raya", "ARS"), ("Sarr", "CRY"), ("Brobbey", "SUN"),
+        ("Muñoz", "CRY"), ("Marmoush", "MCI"), ("Wilson", "LEE"),
+        ("Fernandes", "TOT"), ("Colwill", "CHE"), ("Roefs", "SUN"),
+        ("Kluivert", "BOU"), ("Van de Ven", "TOT"), ("Ødegaard", "ARS"),
     ],
     "Wan Trick Pony": [
-        "João Pedro", "Thiago", "Mbeumo", "Ndiaye", "O.Dango", "Lacroix",
-        "Gakpo", "Tzolis", "Muharemović", "Kerkez", "Watkins", "Ballard",
-        "Donnarumma", "Martinez", "Mosquera",
+        ("João Pedro", "CHE"), ("Thiago", "BRE"), ("Mbeumo", "MUN"),
+        ("Ndiaye", "EVE"), ("O.Dango", "BRE"), ("Lacroix", "CHE"),
+        ("Gakpo", "LIV"), ("Tzolis", "ARS"), ("Muharemović", "LEE"),
+        ("Kerkez", "LIV"), ("Watkins", "AVL"), ("Ballard", "SUN"),
+        ("Donnarumma", "MCI"), ("Martinez", "AVL"), ("Mosquera", "ARS"),
     ],
     "Cyclones FC": [
-        "Saka", "Semenyo", "Rogers", "Gyökeres", "Evanilson", "Igor Jesus",
-        "Cunha", "Gvardiol", "E.Le Fée", "Guéhi", "Mukiele", "Murillo",
-        "Wieffer", "Kelleher", "Sels",
+        ("Saka", "ARS"), ("Semenyo", "MCI"), ("Rogers", "CHE"),
+        ("Gyökeres", "ARS"), ("Evanilson", "BOU"), ("Igor Jesus", "NFO"),
+        ("Cunha", "MUN"), ("Gvardiol", "MCI"), ("E.Le Fée", "SUN"),
+        ("Guéhi", "MCI"), ("Mukiele", "SUN"), ("Murillo", "NFO"),
+        ("Wieffer", "BHA"), ("Kelleher", "BRE"), ("Sels", "NFO"),
     ],
 }
 
@@ -96,22 +113,32 @@ def _fold(s: str) -> str:
     return s.strip().lower()
 
 
-def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
+def load_solio_projections(csv_path: Path, bootstrap: dict) -> tuple[dict[int, list[float]], int]:
     """Same matching approach as sklw_lineup.py's --projections: join by
     name (folded for accents/case), team only as a tiebreaker for a
-    genuine shared-surname collision."""
+    genuine shared-surname collision. Unlike the SKLW tool (one score per
+    week, since SKLW is a weekly submission), this returns each player's
+    FULL list of per-GW projections (one value per '<N>_Pts' column found,
+    in GW order) plus the horizon length -- callers pick a fresh best XI
+    for each week rather than assuming one fixed lineup holds for all of
+    them, since who's actually worth starting changes week to week
+    (rotation, fixtures, injuries)."""
     team_names = {t["id"]: t["name"] for t in bootstrap["teams"]}
     by_name: dict[str, list[dict]] = {}
     for p in bootstrap["elements"]:
         by_name.setdefault(_fold(p["web_name"]), []).append(p)
 
-    points: dict[int, float] = {}
+    per_gw: dict[int, list[float]] = {}
     unmatched = []
     with csv_path.open(newline="", encoding="utf-8-sig") as f:
-        for row in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        pts_cols = sorted((c for c in reader.fieldnames if c.endswith("_Pts")),
+                           key=lambda c: int(c.split("_")[0]))
+        for row in reader:
+            values = [float(row[c]) for c in pts_cols]
             candidates = by_name.get(_fold(row["Name"]), [])
             if len(candidates) == 1:
-                points[candidates[0]["id"]] = float(row["1_Pts"])
+                per_gw[candidates[0]["id"]] = values
                 continue
             if len(candidates) > 1:
                 csv_team = _fold(row["Team"])
@@ -119,39 +146,48 @@ def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
                             if csv_team in _fold(team_names.get(p["team"], ""))
                             or _fold(team_names.get(p["team"], "")) in csv_team]
                 if len(narrowed) == 1:
-                    points[narrowed[0]["id"]] = float(row["1_Pts"])
+                    per_gw[narrowed[0]["id"]] = values
                     continue
             unmatched.append(row["Name"])
     if unmatched:
         shown = ", ".join(unmatched[:10]) + (" ..." if len(unmatched) > 10 else "")
         print(f"WARNING: {len(unmatched)} CSV row(s) didn't match a unique "
               f"FPL player, skipped: {shown}")
-    return points
+    return per_gw, len(pts_cols)
 
 
-def resolve_player(name: str, bootstrap: dict) -> int | None:
-    """Matches a screenshot-derived player name to an FPL element ID: exact
-    web_name match first (folded for accents/case), falling back to a
-    substring match against web_name or full name if that's ambiguous or
-    empty. Returns None (not raises) on no/ambiguous match -- callers warn
-    and skip rather than crash, since this is manually-transcribed data."""
+def resolve_player(name: str, team_code: str, bootstrap: dict) -> int | None:
+    """Matches a screenshot-derived (name, team_code) pair to an FPL element
+    ID: exact web_name match first (folded for accents/case), falling back
+    to a substring match against web_name or full name. team_code (the
+    3-letter short code shown on the draft board, e.g. 'CRY', 'LEE')
+    disambiguates shared surnames -- there's more than one Henderson and
+    Wilson in the FPL player pool. Returns None (not raises) on no/still-
+    ambiguous match -- callers warn and skip rather than crash, since this
+    is manually-transcribed data."""
+    team_short = {t["id"]: t["short_name"] for t in bootstrap["teams"]}
     folded = _fold(name)
-    exact = [p for p in bootstrap["elements"] if _fold(p["web_name"]) == folded]
-    if len(exact) == 1:
-        return exact[0]["id"]
-    if len(exact) > 1:
-        return None
-    candidates = [p for p in bootstrap["elements"]
-                  if folded in _fold(p["web_name"])
-                  or folded in _fold(f"{p['first_name']} {p['second_name']}")]
-    return candidates[0]["id"] if len(candidates) == 1 else None
+    candidates = [p for p in bootstrap["elements"] if _fold(p["web_name"]) == folded]
+    if not candidates:
+        candidates = [p for p in bootstrap["elements"]
+                      if folded in _fold(p["web_name"])
+                      or folded in _fold(f"{p['first_name']} {p['second_name']}")]
+    if len(candidates) == 1:
+        return candidates[0]["id"]
+    if len(candidates) > 1:
+        team_folded = _fold(team_code)
+        narrowed = [p for p in candidates
+                    if _fold(team_short.get(p["team"], "")) == team_folded]
+        if len(narrowed) == 1:
+            return narrowed[0]["id"]
+    return None
 
 
 def pick_best_eleven(element_ids: list[int], players: dict[int, dict],
-                      points: dict[int, float]) -> tuple[list[int], int | None]:
+                      points: dict[int, float]) -> list[int]:
     """Picks the highest-projected VALID starting XI (1 GK, 3-5 DEF, 2-5
-    MID, 1-3 FWD) from a team's full squad. Returns (starter_ids, captain_id)
-    -- captain is whichever starter has the highest projection."""
+    MID, 1-3 FWD) from a team's full squad. No captaincy in this league --
+    every starter counts once, no doubling."""
     by_pos: dict[int, list[tuple[float, int]]] = {1: [], 2: [], 3: [], 4: []}
     for eid in element_ids:
         el = players.get(eid)
@@ -178,8 +214,7 @@ def pick_best_eleven(element_ids: list[int], players: dict[int, dict],
                 best_outfield = combo
 
     starters = ([gk] if gk else []) + best_outfield
-    captain = max(starters)[1] if starters else None
-    return [pid for _, pid in starters], captain
+    return [pid for _, pid in starters]
 
 
 def main():
@@ -200,20 +235,25 @@ def main():
     bootstrap = load_bootstrap()
     players = player_lookup(bootstrap)
 
-    points = ep_next_points(players)
+    ep_next = ep_next_points(players)
+    solio_per_gw: dict[int, list[float]] = {}
+    horizon = 1
     if args.projections:
-        solio_points = load_solio_projections(Path(args.projections), bootstrap)
-        print(f"Loaded {len(solio_points)} player projection(s) from "
-              f"{args.projections} (falling back to ep_next for anyone not "
-              f"matched)")
-        points.update(solio_points)
+        solio_per_gw, horizon = load_solio_projections(Path(args.projections), bootstrap)
+        print(f"Loaded {len(solio_per_gw)} player projection(s) from "
+              f"{args.projections}, covering {horizon} GW(s) (falling back "
+              f"to a flat ep_next estimate each week for anyone not matched)")
+
+    def points_for_week(pid: int, week_idx: int) -> float:
+        per_gw = solio_per_gw.get(pid)
+        return per_gw[week_idx] if per_gw is not None else ep_next.get(pid, 0.0)
 
     results = []
-    for team, names in DRAFT_SQUADS.items():
+    for team, squad in DRAFT_SQUADS.items():
         element_ids = []
         unresolved = []
-        for name in names:
-            eid = resolve_player(name, bootstrap)
+        for name, team_code in squad:
+            eid = resolve_player(name, team_code, bootstrap)
             if eid is None:
                 unresolved.append(name)
             else:
@@ -221,17 +261,21 @@ def main():
         if unresolved:
             print(f"WARNING: {team} -- couldn't resolve: {', '.join(unresolved)}")
 
-        starters, captain = pick_best_eleven(element_ids, players, points)
-        total = sum(points.get(pid, 0.0) for pid in starters)
-        if captain is not None:
-            total += points.get(captain, 0.0)  # captain doubled
-        results.append((team, round(total, 2), captain))
+        # A fresh best XI is picked for EACH week rather than one fixed
+        # lineup for the whole horizon, since who's worth starting changes
+        # week to week (rotation, fixtures, injuries).
+        season_total = 0.0
+        for week in range(horizon):
+            week_points = {pid: points_for_week(pid, week) for pid in element_ids}
+            starters = pick_best_eleven(element_ids, players, week_points)
+            season_total += sum(week_points.get(pid, 0.0) for pid in starters)
+        results.append((team, round(season_total, 2)))
 
     results.sort(key=lambda x: -x[1])
-    print("\n=== Ranked by projected best-XI score ===")
-    for team, total, captain in results:
-        cap_name = players[captain]["web_name"] if captain else "?"
-        print(f"  {team}: {total}  (captain: {cap_name})")
+    print(f"\n=== Ranked by projected total over {horizon} GW(s), best XI "
+          f"picked fresh each week (no captain) ===")
+    for team, total in results:
+        print(f"  {team}: {total}")
 
 
 if __name__ == "__main__":
