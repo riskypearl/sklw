@@ -483,7 +483,9 @@ def main():
         member_name, mid = resolve_manager(args.transfer)
         record_transfer(Path(args.overrides), bootstrap, member_name, mid,
                          args.out, args.in_)
-        args.mode = "preview"
+        print("Run 'run.bat --mode preview' separately to see the updated "
+              "lineup once you're done recording transfers.")
+        return
 
     if not MANAGER_IDS:
         print("ERROR: fill in MANAGER_IDS at the top of this script first "
@@ -533,9 +535,16 @@ def main():
             if picks_data is None:
                 print(f"  {name}: GW{next_gw} picks not public yet "
                       f"(deadline hasn't passed) -- falling back to GW{last_finished_gw}")
-        if picks_data is None:
+        if picks_data is None and last_finished_gw > 0:
             picks_data = get_manager_picks(mid, last_finished_gw)
             gw_used = last_finished_gw
+        if picks_data is None and args.mode == "preview":
+            # No finished GW to fall back to (e.g. mid-GW1, nothing's
+            # finished yet) -- try the current/live GW's picks instead,
+            # which are public once its deadline has passed even in
+            # preview mode.
+            picks_data = get_manager_picks(mid, next_gw)
+            gw_used = next_gw
 
         if picks_data is None:
             print(f"  {name}: could not fetch picks at all (bad manager ID?), skipping")
