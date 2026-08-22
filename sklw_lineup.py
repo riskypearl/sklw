@@ -348,7 +348,10 @@ def resolve_players(bootstrap: dict, fragments: str) -> list[int]:
 def record_transfer(overrides_path: Path, bootstrap: dict, manager_name: str,
                      manager_id: int, out_fragments: str, in_fragments: str) -> None:
     """Resolves player names, appends the out/in pair to that manager's
-    entry in overrides.json (creating the file/entry if needed), and saves."""
+    entry in overrides.json (creating the file/entry if needed), and saves.
+    Skips any (out, in) pair that's already recorded for this manager --
+    re-running the same --transfer command (e.g. by accident) shouldn't
+    double it up."""
     out_ids = resolve_players(bootstrap, out_fragments)
     in_ids = resolve_players(bootstrap, in_fragments)
     if len(out_ids) != len(in_ids):
@@ -357,14 +360,30 @@ def record_transfer(overrides_path: Path, bootstrap: dict, manager_name: str,
 
     all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
     entry = all_overrides.setdefault(str(manager_id), {"out": [], "in": []})
-    entry["out"].extend(out_ids)
-    entry["in"].extend(in_ids)
-    overrides_path.write_text(json.dumps(all_overrides, indent=2))
+    existing_pairs = list(zip(entry["out"], entry["in"]))
 
     players = player_lookup(bootstrap)
-    out_names = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in out_ids)
-    in_names = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in in_ids)
-    print(f"Recorded transfer for {manager_name}: OUT [{out_names}] -> IN [{in_names}]")
+    added, skipped = [], []
+    for pair in zip(out_ids, in_ids):
+        if pair in existing_pairs:
+            skipped.append(pair)
+        else:
+            existing_pairs.append(pair)
+            added.append(pair)
+
+    entry["out"] = [p[0] for p in existing_pairs]
+    entry["in"] = [p[1] for p in existing_pairs]
+    overrides_path.write_text(json.dumps(all_overrides, indent=2))
+
+    def name(pid: int) -> str:
+        return f"{players[pid]['first_name']} {players[pid]['second_name']}"
+
+    if added:
+        added_str = ", ".join(f"{name(o)} -> {name(i)}" for o, i in added)
+        print(f"Recorded transfer for {manager_name}: {added_str}")
+    if skipped:
+        skipped_str = ", ".join(f"{name(o)} -> {name(i)}" for o, i in skipped)
+        print(f"Already recorded (skipped duplicate): {skipped_str}")
     print(f"Saved to {overrides_path}\n")
 
 
