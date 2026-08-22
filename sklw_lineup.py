@@ -389,17 +389,28 @@ def record_transfer(overrides_path: Path, bootstrap: dict, manager_name: str,
 
 def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = None) -> None:
     """scores: [(manager_name, projected_score), ...]. Prints a suggested
-    SKLW role assignment -- top scorers to Strikers+GK (both roles reward
+    SKLW role assignment -- top scorers to GK+Strikers (both roles reward
     being high), rest fill the 11-a-side squad, bottom 2 benched.
 
+    The single highest-projected manager goes to GK, not Strikers -- GK
+    faces BOTH opposing Strikers individually (two H2H battles vs a
+    Striker's one), so it has double the H2H exposure and is where the
+    single best output belongs. Backtested in backtest.py against real
+    historical FPL data: this GK-priority ordering alone was the entire
+    source of improvement over a naive top-2-to-Strikers/3rd-to-GK split
+    -- a further variance/ceiling-weighted selection was ALSO tested there
+    and found to hurt, not help (real higher-volatility players tend to
+    have lower means too, and that mean sacrifice outweighed any upside
+    from the volatility), so this only reorders by plain projected mean.
+
     fh_names: managers on Free Hit this GW are prioritized into the
-    highest-H2H-exposure individual roles, in order: GK first (faces BOTH
-    opposing Strikers -- two H2H battles vs a Striker's one), then the 2
-    Striker slots. A high/hard-to-project FH score is worth more in an
-    individual battle than diluted into the pooled Squad sum, and FH gets
-    no chip score adjustment so it counts at full value. Beyond GK + both
-    Striker slots there's no more individual-battle room, so any further
-    FH managers fall back into the normal pool with no special treatment."""
+    highest-H2H-exposure individual roles, in order: GK first, then the 2
+    Striker slots. FH gets no chip score adjustment so it counts at full
+    value, and (per the same backtest reasoning) an FH score's inherent
+    unpredictability makes it a GK/Striker candidate over a Squad one
+    regardless of rank. Beyond GK + both Striker slots there's no more
+    individual-battle room, so any further FH managers fall back into the
+    normal pool with no special treatment."""
     fh_names = fh_names or set()
     ranked = sorted(scores, key=lambda x: -x[1])
     if len(ranked) < 15:
@@ -432,8 +443,8 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
         squad = pool[idx:idx + 11]
         bench = pool[idx + 11:idx + 13]
     else:
-        strikers = ranked[0:2]
-        gk = ranked[2:3]
+        gk = ranked[0:1]
+        strikers = ranked[1:3]
         squad = ranked[3:14]
         bench = ranked[14:16]
 

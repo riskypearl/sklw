@@ -62,10 +62,15 @@ Two modes:
 
 Output: projects each of the 16 members' GW score (sum of projected points
 over their 11 starters, captain doubled, chip-adjusted per SKLW's rule
-above), then suggests a lineup — top 2 scorers → Strikers, next → GK,
+above), then suggests a lineup — **top scorer → GK**, next 2 → Strikers,
 next 11 → Squad, bottom 2 → Bench. (Both Strikers and GK want HIGH
 projected scorers, since both roles are rewarded for outscoring the
-opponent, not for hiding a weak link.)
+opponent, not for hiding a weak link — GK gets the single best because it
+faces BOTH opposing Strikers individually, double the H2H exposure of a
+Striker slot. See `backtest.py` for how this was validated against real
+historical data — putting the best output in GK helped; additionally
+weighting by variance/ceiling on top of that was tested and found to
+hurt, not help, so the ranking here is by plain projected mean.)
 
 By default the projected points come from FPL's own `ep_next` field.
 `--projections path/to/solio.csv` swaps that out for a Solio-style
