@@ -95,12 +95,15 @@ know player IDs by heart.
 way to record a transfer once a club member tells you about it (the API
 doesn't reveal real transfers until the deadline passes, which is too
 late for pre-deadline planning). It resolves both names, appends the
-swap to that member's entry in `overrides.json`, and immediately re-runs
-in `--mode preview` so you see the updated suggested lineup right away.
+swap to that member's entry in `overrides.json`, and stops there — it
+does NOT re-run the full lineup (running the whole 16-manager fetch
+after every single transfer entered is wasteful if you're logging
+several back to back). Run `run.bat --mode preview` separately once
+you're done recording transfers to see the updated suggested lineup.
 Multiple players in one transfer: comma-separate them, e.g.
 `--out "Haaland,Saka" --in "Watkins,Salah"` (same order on both sides).
-Run it again for each new transfer as members report them in — it
-accumulates in `overrides.json` rather than overwriting.
+Run `--transfer` again for each new transfer as members report them in
+— it accumulates in `overrides.json` rather than overwriting.
 
 `--fh "Manager Name"` marks a club member as playing Free Hit this GW
 and forces them into the suggested lineup's GK slot, regardless of their
