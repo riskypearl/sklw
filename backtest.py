@@ -116,13 +116,19 @@ def build_member(rng: random.Random, pool_ids: list[int], eligible: dict[int, di
 
     actual_total = 0.0
     mean_total = 0.0
-    ceiling_total = 0.0
+    std_total = 0.0
     for eid, actual, mean_proj, ceiling_std in signals:
         mult = 2 if eid == captain_id else 1
         actual_total += actual * mult
         mean_total += mean_proj * mult
-        ceiling_total += (mean_proj + ceiling_std) * mult
-    return {"actual": actual_total, "mean_proj": mean_total, "ceiling_proj": ceiling_total}
+        std_total += ceiling_std * mult
+    return {"actual": actual_total, "mean_proj": mean_total, "std_proj": std_total}
+
+
+def individual_score(member: dict, k: float) -> float:
+    """mean + k*std -- the H2H-role selection score. k=0 reduces to plain
+    mean (method A); k>0 weights toward higher-variance/ceiling members."""
+    return member["mean_proj"] + k * member["std_proj"]
 
 
 def build_club(rng: random.Random, pool_ids: list[int], eligible: dict[int, dict],
@@ -135,8 +141,8 @@ def assign_method_a(members: list[dict]) -> dict:
     return {"strikers": ranked[0:2], "gk": ranked[2:3], "squad": ranked[3:14], "bench": ranked[14:16]}
 
 
-def assign_method_b(members: list[dict]) -> dict:
-    by_ceiling = sorted(range(16), key=lambda i: -members[i]["ceiling_proj"])
+def assign_method_b(members: list[dict], k: float) -> dict:
+    by_ceiling = sorted(range(16), key=lambda i: -individual_score(members[i], k))
     top3 = by_ceiling[0:3]
     gk = [top3[0]]
     strikers = top3[1:3]
@@ -178,6 +184,9 @@ def main():
     ap.add_argument("--trials", type=int, default=2000)
     ap.add_argument("--min-gw", type=int, default=10, help="earliest target GW (needs prior history)")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--k-values", default="0,0.5,1,1.5,2,2.5,3,4",
+                     help="comma-separated ceiling weights (mean + k*std) to sweep, "
+                          "using the SAME random draws for each so only k changes")
     args = ap.parse_args()
 
     print(f"Fetching {args.season} season data from GitHub archive...")
@@ -188,9 +197,7 @@ def main():
     rng = random.Random(args.seed)
     target_gws = list(range(args.min_gw, 39))
 
-    results_a, results_b = [], []
-    wins_a = draws = wins_b = 0
-
+    trials = []  # (club1, club2, roles2_a, goals1_a) -- fixed once, independent of k
     for _ in range(args.trials):
         target_gw = rng.choice(target_gws)
         eligible = eligible_for_target(history, target_gw, min_prior=5)
@@ -200,31 +207,39 @@ def main():
 
         club1 = build_club(rng, pool_ids, eligible, target_gw)
         club2 = build_club(rng, pool_ids, eligible, target_gw)
-
         roles2_a = assign_method_a(club2)
         roles1_a = assign_method_a(club1)
-        roles1_b = assign_method_b(club1)
-
         goals1_a = match_goals(club1, roles1_a, club2, roles2_a)
-        goals1_b = match_goals(club1, roles1_b, club2, roles2_a)
+        trials.append((club1, club2, roles2_a, goals1_a))
 
-        results_a.append(goals1_a)
-        results_b.append(goals1_b)
-        if goals1_b > goals1_a:
-            wins_b += 1
-        elif goals1_b < goals1_a:
-            wins_a += 1
-        else:
-            draws += 1
+    n = len(trials)
+    print(f"\n{n} valid trials. Method A (k=0, plain mean) baseline avg goals = "
+          f"{statistics.mean(g for *_, g in trials):.3f}\n")
+    print(f"{'k':>5}  {'avg goals':>10}  {'B > A':>8}  {'A > B':>8}  {'tied':>8}")
 
-    n = len(results_a)
-    print(f"\n=== {n} valid trials ===")
-    print(f"Method A (plain greedy-by-mean):      avg goals = {statistics.mean(results_a):.3f}")
-    print(f"Method B (ceiling-weighted H2H roles): avg goals = {statistics.mean(results_b):.3f}")
-    print(f"\nHead-to-head (same random draw, method B vs method A):")
-    print(f"  B scored MORE goals: {wins_b} ({100*wins_b/n:.1f}%)")
-    print(f"  A scored MORE goals: {wins_a} ({100*wins_a/n:.1f}%)")
-    print(f"  Tied:                {draws} ({100*draws/n:.1f}%)")
+    best_k, best_avg = None, -1.0
+    for k_str in args.k_values.split(","):
+        k = float(k_str)
+        goals_b = []
+        wins_a = draws = wins_b = 0
+        for club1, club2, roles2_a, goals1_a in trials:
+            roles1_b = assign_method_b(club1, k)
+            goals1_b = match_goals(club1, roles1_b, club2, roles2_a)
+            goals_b.append(goals1_b)
+            if goals1_b > goals1_a:
+                wins_b += 1
+            elif goals1_b < goals1_a:
+                wins_a += 1
+            else:
+                draws += 1
+        avg = statistics.mean(goals_b)
+        print(f"{k:>5.1f}  {avg:>10.3f}  {100*wins_b/n:>7.1f}%  {100*wins_a/n:>7.1f}%  {100*draws/n:>7.1f}%")
+        if avg > best_avg:
+            best_avg, best_k = avg, k
+
+    print(f"\nBest k in this sweep: {best_k} (avg goals {best_avg:.3f} vs {statistics.mean(g for *_, g in trials):.3f} for plain mean)")
+    print(f"Suggested rule: individual-role score = mean_projection + {best_k} * "
+          f"stdev(player's own recent real scores)")
 
 
 if __name__ == "__main__":
