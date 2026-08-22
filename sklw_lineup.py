@@ -188,6 +188,33 @@ def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
     return points
 
 
+def find_solio_csv() -> Path | None:
+    """Finds a Solio projections CSV automatically -- no need to rename or
+    move a fresh weekly export by hand. Checks 'solio.csv' in the current
+    folder first (an explicit, stable override if you want one), then
+    falls back to the most recently downloaded CSV in the user's Downloads
+    folder whose header actually looks like a Solio export (checked by
+    content, not just filename, so an unrelated CSV isn't picked up by
+    mistake)."""
+    here = Path("solio.csv")
+    if here.exists():
+        return here
+
+    downloads = Path.home() / "Downloads"
+    if not downloads.is_dir():
+        return None
+    candidates = sorted(downloads.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in candidates:
+        try:
+            with p.open(encoding="utf-8-sig", newline="") as f:
+                header = next(csv.reader(f), [])
+        except (OSError, StopIteration):
+            continue
+        if {"Pos", "ID", "Name", "Team"}.issubset(header) and any(c.endswith("_Pts") for c in header):
+            return p
+    return None
+
+
 def pick_best_eleven(picks_data: dict, players: dict[int, dict],
                       points: dict[int, float]) -> tuple[list[int], int | None]:
     """Given a manager's full 15-man squad, picks the highest-projected
@@ -469,8 +496,8 @@ def main():
         fh_names.add(member_name)
 
     points = ep_next_points(players)
-    projections_path = Path(args.projections) if args.projections else Path("solio.csv")
-    if projections_path.exists():
+    projections_path = Path(args.projections) if args.projections else find_solio_csv()
+    if projections_path and projections_path.exists():
         solio_points = load_solio_projections(projections_path, bootstrap)
         print(f"Loaded {len(solio_points)} player projection(s) from "
               f"{projections_path} (falling back to ep_next for anyone not "
@@ -480,9 +507,9 @@ def main():
         print(f"ERROR: no projections CSV found at {projections_path}")
         sys.exit(1)
     else:
-        print("No solio.csv in the current folder -- using ep_next only. "
-              "Save a Solio projections export here as solio.csv (or pass "
-              "--projections <path>) to use it automatically.")
+        print("No Solio projections CSV found (checked solio.csv and "
+              "Downloads) -- using ep_next only. Pass --projections <path> "
+              "to use a specific file.")
 
     last_finished_gw, next_gw = current_and_next_gw(bootstrap)
     print(f"Last finished GW: {last_finished_gw}, projecting for GW: {next_gw}")
