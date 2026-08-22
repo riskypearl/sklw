@@ -392,32 +392,45 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
     SKLW role assignment -- top scorers to Strikers+GK (both roles reward
     being high), rest fill the 11-a-side squad, bottom 2 benched.
 
-    fh_names: managers on Free Hit this GW are forced into the GK slot --
-    GK faces BOTH opposing Strikers individually (two H2H battles vs a
-    Striker's one), so a high/hard-to-project FH score is worth more
-    there than anywhere else, and FH gets no chip score adjustment so it
-    counts at full value."""
+    fh_names: managers on Free Hit this GW are prioritized into the
+    highest-H2H-exposure individual roles, in order: GK first (faces BOTH
+    opposing Strikers -- two H2H battles vs a Striker's one), then the 2
+    Striker slots. A high/hard-to-project FH score is worth more in an
+    individual battle than diluted into the pooled Squad sum, and FH gets
+    no chip score adjustment so it counts at full value. Beyond GK + both
+    Striker slots there's no more individual-battle room, so any further
+    FH managers fall back into the normal pool with no special treatment."""
     fh_names = fh_names or set()
     ranked = sorted(scores, key=lambda x: -x[1])
     if len(ranked) < 15:
         print(f"WARNING: only {len(ranked)} managers with data (need 15) -- "
               f"suggestion below is incomplete.")
 
-    fh_present = [ns for ns in ranked if ns[0] in fh_names]
-    fh_gk = max(fh_present, key=lambda x: x[1]) if fh_present else None
+    fh_present = sorted((ns for ns in ranked if ns[0] in fh_names), key=lambda x: -x[1])
+    fh_gk = fh_present[0] if fh_present else None
+    fh_strikers = fh_present[1:3]
+    fh_extra = fh_present[3:]
+    fh_striker_names = {n for n, _ in fh_strikers}
+
     if fh_gk:
-        others = [n for n, _ in fh_present if n != fh_gk[0]]
-        if others:
-            print(f"NOTE: also on Free Hit but only 1 GK slot exists, "
-                  f"left in the normal pool: {', '.join(others)}")
+        if fh_extra:
+            print(f"NOTE: also on Free Hit but GK + both Striker slots "
+                  f"already taken by higher-priority FH picks, left in the "
+                  f"normal pool: {', '.join(n for n, _ in fh_extra)}")
+        for n, _ in fh_strikers:
+            print(f"NOTE: {n} is on Free Hit this GW -- forced into "
+                  f"Strikers (next-highest H2H exposure after GK).")
         print(f"NOTE: {fh_gk[0]} is on Free Hit this GW -- forced into GK "
               f"(GK faces both opponent Strikers, double the H2H exposure "
               f"of a Striker slot, so a big FH score is worth more there).")
-        pool = [ns for ns in ranked if ns[0] != fh_gk[0]]
-        strikers = pool[0:2]
+        assigned = {fh_gk[0]} | fh_striker_names
+        pool = [ns for ns in ranked if ns[0] not in assigned]
+        remaining_striker_slots = 2 - len(fh_strikers)
+        strikers = fh_strikers + pool[0:remaining_striker_slots]
         gk = [fh_gk]
-        squad = pool[2:13]
-        bench = pool[13:15]
+        idx = remaining_striker_slots
+        squad = pool[idx:idx + 11]
+        bench = pool[idx + 11:idx + 13]
     else:
         strikers = ranked[0:2]
         gk = ranked[2:3]
@@ -427,7 +440,10 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
     print("\n=== Suggested SKLW lineup ===")
     print("\nStrikers (want HIGH -- beat opponent's GK):")
     for name, sc in strikers:
-        print(f"  {name}: {sc}")
+        if name in fh_striker_names:
+            print(f"  {name}: FH")
+        else:
+            print(f"  {name}: {sc}")
     print("\nGoalkeeper (want HIGH -- beat opponent's 2 strikers):")
     for name, sc in gk:
         if fh_gk and name == fh_gk[0]:
