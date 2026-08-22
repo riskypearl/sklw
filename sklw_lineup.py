@@ -431,10 +431,7 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
     print("\nGoalkeeper (want HIGH -- beat opponent's 2 strikers):")
     for name, sc in gk:
         if fh_gk and name == fh_gk[0]:
-            print(f"  {name}: FH (actual score unknown until their Free "
-                  f"Hit squad is picked -- the {sc} shown elsewhere is "
-                  f"just their normal-squad projection, not what they'll "
-                  f"actually field)")
+            print(f"  {name}: FH")
         else:
             print(f"  {name}: {sc}")
     print("\nSquad (11, sum vs opponent's 11):")
