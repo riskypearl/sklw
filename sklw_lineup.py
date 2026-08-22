@@ -96,13 +96,20 @@ def load_bootstrap() -> dict:
 
 
 def current_and_next_gw(bootstrap: dict) -> tuple[int, int]:
-    """Returns (last_finished_gw, gw_to_project) from bootstrap events."""
+    """Returns (last_finished_gw, gw_to_project). The GW to project is the
+    LIVE one (is_current) when there is one -- mid-GW, FPL flags that GW as
+    is_current (not is_next) even though its deadline has already passed
+    and picks are public, so is_next alone would incorrectly skip ahead to
+    the GW AFTER the one that's actually in progress. Falls back to
+    is_next only between gameweeks (nothing currently live)."""
     events = bootstrap["events"]
     finished = [e for e in events if e["finished"]]
+    current_ev = next((e for e in events if e["is_current"]), None)
     next_ev = next((e for e in events if e["is_next"]), None)
     last_finished_id = finished[-1]["id"] if finished else 0
-    next_id = next_ev["id"] if next_ev else last_finished_id + 1
-    return last_finished_id, next_id
+    target_ev = current_ev or next_ev
+    target_id = target_ev["id"] if target_ev else last_finished_id + 1
+    return last_finished_id, target_id
 
 
 def player_lookup(bootstrap: dict) -> dict[int, dict]:
