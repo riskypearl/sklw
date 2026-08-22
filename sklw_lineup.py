@@ -459,6 +459,9 @@ def main():
                           "3-5 DEF, 2-5 MID, 1-3 FWD) picked from their real "
                           "15-man squad. Not the authoritative actual-picks "
                           "score -- chip adjustments aren't applied.")
+    ap.add_argument("--list-transfers", action="store_true",
+                     help="print all transfers recorded in overrides.json "
+                          "this week (by player name), then exit.")
     args = ap.parse_args()
 
     print_banner()
@@ -485,6 +488,28 @@ def main():
                          args.out, args.in_)
         print("Run 'run.bat --mode preview' separately to see the updated "
               "lineup once you're done recording transfers.")
+        return
+
+    if args.list_transfers:
+        ov_path = Path(args.overrides)
+        if not ov_path.exists():
+            print(f"No transfers recorded yet ({ov_path} doesn't exist).")
+            return
+        overrides = json.loads(ov_path.read_text())
+        if not overrides:
+            print("No transfers recorded yet.")
+            return
+        id_to_name = {v: k for k, v in MANAGER_IDS.items()}
+        print("=== Transfers recorded this week ===")
+        for mid_str, entry in overrides.items():
+            manager_name = id_to_name.get(int(mid_str), f"manager {mid_str}")
+            out_names = ", ".join(
+                f"{players[i]['first_name']} {players[i]['second_name']}"
+                if i in players else f"#{i}" for i in entry.get("out", []))
+            in_names = ", ".join(
+                f"{players[i]['first_name']} {players[i]['second_name']}"
+                if i in players else f"#{i}" for i in entry.get("in", []))
+            print(f"  {manager_name}: OUT [{out_names}] -> IN [{in_names}]")
         return
 
     if not MANAGER_IDS:
