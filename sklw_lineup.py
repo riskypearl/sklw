@@ -243,18 +243,25 @@ def project_manager_score(picks_data: dict, points: dict[int, float]) -> float:
     """Sum projected points over the 11 starters, captain doubled, adjusted
     for chips per SKLW's own rule: BB drops the bench, TC deducts a third of
     the captain's score (since SKLW doesn't want chip effects skewing the
-    inter-club scoring)."""
+    inter-club scoring).
+
+    Starters are picks with squad slot 'position' <= 11, NOT 'multiplier' >
+    0 -- under Bench Boost, FPL's own API sets the bench's multiplier to 1
+    too (since their real points count that week), so filtering on
+    multiplier would silently include the bench exactly when SKLW's rule
+    says not to. 'position' (1-11 = starting XI, 12-15 = bench) reflects
+    the manager's actual starting-11 choice regardless of chip."""
     picks = picks_data["picks"]
     chip = picks_data.get("active_chip")  # "bboost", "3xc", "wildcard", "freehit", or None
 
-    starters = [p for p in picks if p["multiplier"] > 0 or chip == "bboost"]
+    starters = [p for p in picks if p["position"] <= 11]
     total = 0.0
     captain_pts = 0.0
     for p in starters:
         pts = points.get(p["element"])
         if pts is None:
             continue
-        mult = p["multiplier"] if p["multiplier"] > 0 else 1  # bboost includes bench at x1
+        mult = p["multiplier"] if p["multiplier"] > 0 else 1
         total += pts * mult
         if p["is_captain"]:
             captain_pts = pts * mult
@@ -416,7 +423,8 @@ def main():
                           "(Pos,ID,Name,BV,SV,Team,1_xMins...,1_Pts...) to "
                           "score with instead of FPL's ep_next. Matched to "
                           "FPL players by name+team. Any player not found "
-                          "in the CSV falls back to ep_next.")
+                          "in the CSV falls back to ep_next. Defaults to "
+                          "solio.csv in the current folder if it exists.")
     ap.add_argument("--best-xi", action="store_true",
                      help="one-off comparison: ignore each manager's actual "
                           "submitted starting-11/captain and instead score "
@@ -461,12 +469,20 @@ def main():
         fh_names.add(member_name)
 
     points = ep_next_points(players)
-    if args.projections:
-        solio_points = load_solio_projections(Path(args.projections), bootstrap)
+    projections_path = Path(args.projections) if args.projections else Path("solio.csv")
+    if projections_path.exists():
+        solio_points = load_solio_projections(projections_path, bootstrap)
         print(f"Loaded {len(solio_points)} player projection(s) from "
-              f"{args.projections} (falling back to ep_next for anyone not "
+              f"{projections_path} (falling back to ep_next for anyone not "
               f"matched)")
         points.update(solio_points)
+    elif args.projections:
+        print(f"ERROR: no projections CSV found at {projections_path}")
+        sys.exit(1)
+    else:
+        print("No solio.csv in the current folder -- using ep_next only. "
+              "Save a Solio projections export here as solio.csv (or pass "
+              "--projections <path>) to use it automatically.")
 
     last_finished_gw, next_gw = current_and_next_gw(bootstrap)
     print(f"Last finished GW: {last_finished_gw}, projecting for GW: {next_gw}")

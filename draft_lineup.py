@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 import unicodedata
 from pathlib import Path
 
@@ -222,7 +223,9 @@ def main():
     ap.add_argument("--projections", metavar="CSV_PATH",
                      help="path to a Solio-style projections CSV to score "
                           "with instead of FPL's ep_next. Falls back to "
-                          "ep_next for anyone not matched in the CSV.")
+                          "ep_next for anyone not matched in the CSV. "
+                          "Defaults to solio.csv in the current folder if "
+                          "it exists.")
     args = ap.parse_args()
 
     print("=== Draft League Best-XI Comparison ===")
@@ -238,11 +241,19 @@ def main():
     ep_next = ep_next_points(players)
     solio_per_gw: dict[int, list[float]] = {}
     horizon = 1
-    if args.projections:
-        solio_per_gw, horizon = load_solio_projections(Path(args.projections), bootstrap)
+    projections_path = Path(args.projections) if args.projections else Path("solio.csv")
+    if projections_path.exists():
+        solio_per_gw, horizon = load_solio_projections(projections_path, bootstrap)
         print(f"Loaded {len(solio_per_gw)} player projection(s) from "
-              f"{args.projections}, covering {horizon} GW(s) (falling back "
+              f"{projections_path}, covering {horizon} GW(s) (falling back "
               f"to a flat ep_next estimate each week for anyone not matched)")
+    elif args.projections:
+        print(f"ERROR: no projections CSV found at {projections_path}")
+        sys.exit(1)
+    else:
+        print("No solio.csv in the current folder -- using ep_next only. "
+              "Save a Solio projections export here as solio.csv (or pass "
+              "--projections <path>) to use it automatically.")
 
     def points_for_week(pid: int, week_idx: int) -> float:
         per_gw = solio_per_gw.get(pid)
