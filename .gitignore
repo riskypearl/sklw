@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 overrides.json
+solio_auth_state.json
+solio.csv

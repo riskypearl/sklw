@@ -74,13 +74,54 @@ hurt, not help, so the ranking here is by plain projected mean.)
 
 By default the projected points come from FPL's own `ep_next` field.
 `--projections path/to/solio.csv` swaps that out for a Solio-style
-projections CSV instead (`Pos,ID,Name,BV,SV,Team,1_xMins,...,10_xMins,
-1_Pts,...,10_Pts`) — it matches players by name (Solio's `Name` column is
+projections CSV instead (`Pos,ID,Name,BV,SV,Team,1_xMins,...,N_xMins,
+1_Pts,...,N_Pts`) — it matches players by name (Solio's `Name` column is
 FPL's short "web_name", e.g. `Saka`, `J.Timber`) + team, since Solio's own
 `ID` column is its own internal numbering, not the FPL element ID. Uses
-the `1_Pts` column (projection for the next upcoming GW). Anyone in the
-squad that the CSV doesn't match falls back to `ep_next` automatically,
-with a warning listing what didn't match so you can sanity-check it.
+whichever `<N>_Pts` column has the lowest number (the soonest upcoming
+GW — Solio numbers these relative to the current GW, not always starting
+at `1`). Anyone in the squad that the CSV doesn't match falls back to
+`ep_next` automatically, with a warning listing what didn't match so you
+can sanity-check it. If no `--projections` path is given, it auto-detects
+a CSV: checks for `solio.csv` in this folder first, then falls back to
+the most recently downloaded CSV in your Downloads folder that actually
+looks like a Solio export (checked by header content, not filename).
+
+### Fetching the Solio CSV automatically (`fetch_solio.py`)
+
+Solio's login is Google Sign-In, which Google actively blocks from being
+scripted — so this deliberately does NOT automate the login itself.
+Instead it follows the same pattern already used in the sibling
+`fpl-model` project: log in **once**, by hand, in a real visible browser
+window; Playwright saves that session to a local file
+(`solio_auth_state.json`, gitignored — never commit it, it's equivalent
+to being logged into your account); every run after that reuses the
+saved session automatically. The CSV export button itself still needs a
+manual click each run (the exact page/selector isn't known here), but
+Playwright watches for the download and saves it straight into this
+folder as `solio.csv`, which `sklw_lineup.py`/`draft_lineup.py` then
+pick up automatically with no `--projections` flag needed.
+
+Setup (one-time):
+```
+pip install playwright
+playwright install chromium
+fetch_solio.bat --login
+```
+A real browser window opens — log in with Google yourself, navigate to
+wherever you'd normally go for the export, then press Enter in the
+terminal once logged in.
+
+Normal use (whenever you want a fresh CSV):
+```
+fetch_solio.bat
+```
+Opens a browser already logged in via the saved session — click the
+export/download button same as you do manually today, then press Enter
+in the terminal. The download is captured automatically as `solio.csv`.
+
+If the saved session expires (Solio logs you out), just run
+`fetch_solio.bat --login` again.
 
 `--best-xi` is a one-off comparison: instead of trusting each manager's
 actual submitted starting-11/captain, it scores them using the
