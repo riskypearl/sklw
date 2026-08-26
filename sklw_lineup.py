@@ -152,13 +152,16 @@ def _fold(s: str) -> str:
 
 def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
     """Maps a Solio-style projections CSV (Pos,ID,Name,BV,SV,Team,1_xMins...,
-    1_Pts...,10_Pts) onto FPL element IDs, keyed by the '1_Pts' column (next
-    upcoming GW). Solio's own 'ID' column is its own internal numbering, not
-    the FPL element ID, so matching is by name (FPL's short web_name) first
-    -- team is only used to disambiguate the rare case of two players
-    sharing a web_name, not required to match, since a promoted club's name
-    or a recent real-life transfer can make the two sources' 'Team' values
-    disagree even for an unambiguous, correctly-matched player."""
+    N_Pts...) onto FPL element IDs, keyed by whichever '<N>_Pts' column has
+    the LOWEST number (the soonest upcoming GW) -- not hardcoded to
+    '1_Pts', since Solio numbers these relative to the current GW rather
+    than always resetting to 1 (e.g. '2_Pts' once GW1 has passed). Solio's
+    own 'ID' column is its own internal numbering, not the FPL element ID,
+    so matching is by name (FPL's short web_name) first -- team is only
+    used to disambiguate the rare case of two players sharing a web_name,
+    not required to match, since a promoted club's name or a recent
+    real-life transfer can make the two sources' 'Team' values disagree
+    even for an unambiguous, correctly-matched player."""
     team_names = {t["id"]: t["name"] for t in bootstrap["teams"]}
     by_name: dict[str, list[dict]] = {}
     for p in bootstrap["elements"]:
@@ -167,10 +170,17 @@ def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
     points: dict[int, float] = {}
     unmatched = []
     with csv_path.open(newline="", encoding="utf-8-sig") as f:
-        for row in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        pts_cols = sorted((c for c in reader.fieldnames if c.endswith("_Pts")),
+                           key=lambda c: int(c.split("_")[0]))
+        if not pts_cols:
+            print(f"ERROR: no '<N>_Pts' column found in {csv_path}")
+            sys.exit(1)
+        next_gw_col = pts_cols[0]
+        for row in reader:
             candidates = by_name.get(_fold(row["Name"]), [])
             if len(candidates) == 1:
-                points[candidates[0]["id"]] = float(row["1_Pts"])
+                points[candidates[0]["id"]] = float(row[next_gw_col])
                 continue
             if len(candidates) > 1:
                 csv_team = _fold(row["Team"])
@@ -178,7 +188,7 @@ def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
                             if csv_team in _fold(team_names.get(p["team"], ""))
                             or _fold(team_names.get(p["team"], "")) in csv_team]
                 if len(narrowed) == 1:
-                    points[narrowed[0]["id"]] = float(row["1_Pts"])
+                    points[narrowed[0]["id"]] = float(row[next_gw_col])
                     continue
             unmatched.append(row["Name"])
     if unmatched:
