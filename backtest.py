@@ -62,8 +62,9 @@ def fetch_season_rows(season: str) -> list[dict]:
 
 
 def build_player_history(rows: list[dict], pool_size: int) -> dict[int, dict]:
-    """Returns element_id -> {'position': str, 'by_gw': {gw: (total_points, xP)}},
-    restricted to the lowest `pool_size` distinct element IDs found."""
+    """Returns element_id -> {'position': str, 'team': str, 'by_gw': {gw:
+    (total_points, xP)}}, restricted to the lowest `pool_size` distinct
+    element IDs found."""
     by_player: dict[int, dict] = {}
     for row in rows:
         try:
@@ -73,7 +74,8 @@ def build_player_history(rows: list[dict], pool_size: int) -> dict[int, dict]:
             xp = float(row["xP"])
         except (ValueError, KeyError):
             continue
-        entry = by_player.setdefault(eid, {"position": row["position"], "by_gw": {}})
+        entry = by_player.setdefault(eid, {"position": row["position"],
+                                            "team": row["team"], "by_gw": {}})
         entry["by_gw"][gw] = (pts, xp)
 
     pool_ids = sorted(by_player)[:pool_size]
@@ -105,12 +107,9 @@ def player_signals(entry: dict, target_gw: int) -> tuple[float, float, float]:
     return actual, mean_proj, ceiling_std
 
 
-def build_member(rng: random.Random, pool_ids: list[int], eligible: dict[int, dict],
-                  target_gw: int) -> dict:
-    """One simulated club member = 11 real players drawn from the pool,
-    captained by whichever has the highest mean_proj (decision-time, not
-    hindsight)."""
-    squad_ids = rng.sample(pool_ids, 11)
+def _finalize_member(squad_ids: list[int], eligible: dict[int, dict], target_gw: int) -> dict:
+    """Shared scoring step: captain = highest mean_proj (decision-time,
+    not hindsight), sums actual/mean/std with the captain doubled."""
     signals = [(eid, *player_signals(eligible[eid], target_gw)) for eid in squad_ids]
     captain_id = max(signals, key=lambda s: s[2])[0]  # highest mean_proj
 
@@ -123,6 +122,84 @@ def build_member(rng: random.Random, pool_ids: list[int], eligible: dict[int, di
         mean_total += mean_proj * mult
         std_total += ceiling_std * mult
     return {"actual": actual_total, "mean_proj": mean_total, "std_proj": std_total}
+
+
+def build_member(rng: random.Random, pool_ids: list[int], eligible: dict[int, dict],
+                  target_gw: int) -> dict:
+    """One simulated club member = 11 real players drawn from the pool."""
+    return _finalize_member(rng.sample(pool_ids, 11), eligible, target_gw)
+
+
+def build_member_stacked(rng: random.Random, pool_ids: list[int], eligible: dict[int, dict],
+                          target_gw: int, stack_size: int = 3) -> dict:
+    """Like build_member, but deliberately stacks `stack_size` defenders
+    from the SAME real team (a classic FPL strategy -- a strong defensive
+    team's defenders' clean-sheet points are correlated, so this raises
+    the member's own score variance without necessarily sacrificing mean,
+    unlike swapping to individually weaker/streakier players)."""
+    by_team: dict[str, list[int]] = defaultdict(list)
+    for eid in pool_ids:
+        if eligible[eid]["position"] == "DEF":
+            by_team[eligible[eid]["team"]].append(eid)
+    candidate_teams = [t for t, defs in by_team.items() if len(defs) >= stack_size]
+    if not candidate_teams:
+        return build_member(rng, pool_ids, eligible, target_gw)
+
+    team = rng.choice(candidate_teams)
+    stacked_defs = rng.sample(by_team[team], stack_size)
+    rest_pool = [eid for eid in pool_ids if eid not in stacked_defs]
+    squad_ids = stacked_defs + rng.sample(rest_pool, 11 - stack_size)
+    return _finalize_member(squad_ids, eligible, target_gw)
+
+
+def build_member_diversified(rng: random.Random, pool_ids: list[int], eligible: dict[int, dict],
+                              target_gw: int) -> dict:
+    """Like build_member, but deliberately avoids picking more than one
+    defender from the same real team -- the opposite bet from stacking,
+    minimizing correlation between the member's own players."""
+    shuffled = pool_ids[:]
+    rng.shuffle(shuffled)
+    squad_ids: list[int] = []
+    used_def_teams: set[str] = set()
+    for eid in shuffled:
+        if len(squad_ids) == 11:
+            break
+        if eligible[eid]["position"] == "DEF":
+            team = eligible[eid]["team"]
+            if team in used_def_teams:
+                continue
+            used_def_teams.add(team)
+        squad_ids.append(eid)
+    if len(squad_ids) < 11:  # pool too thin to satisfy the constraint, top up
+        remaining = [eid for eid in pool_ids if eid not in squad_ids]
+        squad_ids += remaining[: 11 - len(squad_ids)]
+    return _finalize_member(squad_ids, eligible, target_gw)
+
+
+def defender_pairwise_correlation(history: dict[int, dict]) -> tuple[float, float, int, int]:
+    """Real measured Pearson correlation of GW-by-GW total_points between
+    pairs of defenders, split same-team vs different-team, using each
+    pair's overlapping GWs this season. Returns (avg_same_team_corr,
+    avg_diff_team_corr, n_same_pairs, n_diff_pairs)."""
+    defenders = [eid for eid, e in history.items() if e["position"] == "DEF"]
+    same_team, diff_team = [], []
+    for i in range(len(defenders)):
+        for j in range(i + 1, len(defenders)):
+            a, b = defenders[i], defenders[j]
+            gws_a, gws_b = history[a]["by_gw"], history[b]["by_gw"]
+            common = sorted(set(gws_a) & set(gws_b))
+            if len(common) < 10:
+                continue
+            xa = [gws_a[gw][0] for gw in common]
+            xb = [gws_b[gw][0] for gw in common]
+            try:
+                corr = statistics.correlation(xa, xb)
+            except statistics.StatisticsError:
+                continue
+            (same_team if history[a]["team"] == history[b]["team"] else diff_team).append(corr)
+    avg_same = statistics.mean(same_team) if same_team else float("nan")
+    avg_diff = statistics.mean(diff_team) if diff_team else float("nan")
+    return avg_same, avg_diff, len(same_team), len(diff_team)
 
 
 def individual_score(member: dict, k: float) -> float:
@@ -187,6 +264,9 @@ def main():
     ap.add_argument("--k-values", default="0,0.5,1,1.5,2,2.5,3,4",
                      help="comma-separated ceiling weights (mean + k*std) to sweep, "
                           "using the SAME random draws for each so only k changes")
+    ap.add_argument("--covariance", action="store_true",
+                     help="also run the same-team-defender-stacking comparison "
+                          "(stacked vs diversified vs normal member construction)")
     args = ap.parse_args()
 
     print(f"Fetching {args.season} season data from GitHub archive...")
@@ -240,6 +320,39 @@ def main():
     print(f"\nBest k in this sweep: {best_k} (avg goals {best_avg:.3f} vs {statistics.mean(g for *_, g in trials):.3f} for plain mean)")
     print(f"Suggested rule: individual-role score = mean_projection + {best_k} * "
           f"stdev(player's own recent real scores)")
+
+    if args.covariance:
+        print(f"\n=== Same-team defender stacking ===")
+        avg_same, avg_diff, n_same, n_diff = defender_pairwise_correlation(history)
+        print(f"Real measured correlation of GW-by-GW scores this season:")
+        print(f"  same-team defender pairs:      {avg_same:.3f}  (n={n_same} pairs)")
+        print(f"  different-team defender pairs: {avg_diff:.3f}  (n={n_diff} pairs)")
+
+        builders = {
+            "normal (random 11)": build_member,
+            "stacked (3 DEF same team)": lambda rng, pids, elig, gw: build_member_stacked(rng, pids, elig, gw, 3),
+            "diversified (no 2 DEF same team)": build_member_diversified,
+        }
+        cov_results: dict[str, list[int]] = {name: [] for name in builders}
+        cov_trials = 0
+        for _ in range(args.trials):
+            target_gw = rng.choice(target_gws)
+            eligible = eligible_for_target(history, target_gw, min_prior=5)
+            pool_ids = list(eligible)
+            if len(pool_ids) < 22:
+                continue
+            club2 = build_club(rng, pool_ids, eligible, target_gw)
+            roles2_a = assign_method_a(club2)
+            for name, builder in builders.items():
+                club1 = [builder(rng, pool_ids, eligible, target_gw) for _ in range(16)]
+                roles1_a = assign_method_a(club1)
+                cov_results[name].append(match_goals(club1, roles1_a, club2, roles2_a))
+            cov_trials += 1
+
+        print(f"\n{cov_trials} valid trials (each construction faces the SAME "
+              f"opponent draw per trial):")
+        for name, goals in cov_results.items():
+            print(f"  {name:<34} avg goals = {statistics.mean(goals):.3f}")
 
 
 if __name__ == "__main__":
