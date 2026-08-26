@@ -79,12 +79,18 @@ def do_login():
           f"--login) will reuse it automatically.")
 
 
+DOWNLOAD_BUTTON_LABEL = "Download points projections"
+
+
 def do_fetch():
-    """Opens a browser using the saved session (already logged in) and
-    waits for you to click through to the CSV export/download button
-    yourself -- the exact page/button isn't known here, so this part
-    stays manual. Whatever file downloads gets captured and saved as
-    solio.csv in this folder automatically."""
+    """Opens a browser using the saved session (already logged in), waits
+    for the real 'Download points projections' button (matched by its
+    aria-label, a stable accessibility attribute -- not the auto-generated
+    id next to it, which looks like it'd change across page loads) to
+    appear, and clicks it automatically once found. If the button isn't
+    on the landing page, navigate there yourself in the opened window --
+    the script keeps waiting and will click it the moment it appears.
+    Whatever file downloads gets captured and saved as solio.csv here."""
     from playwright.sync_api import sync_playwright
 
     if not AUTH_STATE_PATH.exists():
@@ -100,20 +106,22 @@ def do_fetch():
         context = browser.new_context(storage_state=str(AUTH_STATE_PATH))
         page = context.new_page()
         page.goto(SOLIO_URL)
-        print("Browser opened using your saved session. Click through to "
-              "the CSV export/download button the same way you normally "
-              "do, then come back here and press Enter -- the download "
-              "is being captured in the background as soon as you click "
-              "it, this Enter just lets the script know to check for it.")
+        print(f"Browser opened using your saved session. Waiting for the "
+              f"'{DOWNLOAD_BUTTON_LABEL}' button to appear (navigate there "
+              f"yourself if it doesn't load automatically) -- it'll be "
+              f"clicked automatically the moment it's found, no action "
+              f"needed from you otherwise.")
         try:
-            with page.expect_download(timeout=300_000) as download_info:
-                input("Press Enter AFTER you've clicked the export/download "
-                      "button in the browser...")
+            button = page.get_by_role("button", name=DOWNLOAD_BUTTON_LABEL)
+            button.wait_for(state="visible", timeout=120_000)
+            with page.expect_download(timeout=60_000) as download_info:
+                button.click()
             download = download_info.value
             download.save_as(str(OUT_PATH))
             print(f"Saved to {OUT_PATH}")
         except Exception as e:
-            print(f"No download captured ({e}). Nothing saved.")
+            print(f"Could not find/click the download button automatically "
+                  f"({e}). Nothing saved.")
         browser.close()
 
 
