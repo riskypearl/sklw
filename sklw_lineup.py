@@ -679,14 +679,26 @@ def main():
             print(f"  {name}: could not fetch picks at all (bad manager ID?), skipping")
             continue
 
+        # gw_used == next_gw means these are the manager's REAL, actually
+        # locked-in picks for the GW being projected -- trust them as-is,
+        # they're not a guess. Any other gw_used means we're using an
+        # older/fallback squad as a proxy for what they'll field, since
+        # their real picks for next_gw aren't public yet -- in that case,
+        # optimize (best-xi) rather than assume they'll blindly repeat an
+        # older week's exact selection. --best-xi forces optimization even
+        # when real picks ARE available, for an explicit "what's the
+        # ceiling" comparison.
+        use_best_xi = args.best_xi or (gw_used != next_gw)
+
         if args.mode == "preview" and str(mid) in overrides:
             picks_data = apply_overrides(picks_data, overrides[str(mid)])
 
-        if args.best_xi:
+        if use_best_xi:
             score = project_best_xi_score(picks_data, players, points)
         else:
             score = project_manager_score(picks_data, points)
-        print(f"  {name} (GW{gw_used} squad): projected {score}")
+        tag = "best-xi" if use_best_xi else "actual picks"
+        print(f"  {name} (GW{gw_used} squad, {tag}): projected {score}")
         scores.append((name, score))
 
     suggest_lineup(scores, fh_names)
