@@ -123,6 +123,15 @@ in the terminal. The download is captured automatically as `solio.csv`.
 If the saved session expires (Solio logs you out), just run
 `fetch_solio.bat --login` again.
 
+`run.bat`/`run_draft.bat` now call `fetch_solio.py` automatically before
+running, so a single `run.bat` will pop up the browser for you to click
+export each time (if you haven't logged in yet, or don't click anything
+within 5 minutes, it just skips ahead and uses whatever `solio.csv`/
+`ep_next` is already available — it won't crash or hang forever). If you
+want to skip the fetch step entirely and just re-run projections against
+the CSV you already have, call the script directly instead:
+`venv\Scripts\python.exe sklw_lineup.py` (or `draft_lineup.py`).
+
 `--best-xi` is a one-off comparison: instead of trusting each manager's
 actual submitted starting-11/captain, it scores them using the
 highest-projected VALID XI (real FPL formation rules — 1 GK, 3–5 DEF,
