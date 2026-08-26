@@ -401,6 +401,47 @@ def record_transfer(overrides_path: Path, bootstrap: dict, manager_name: str,
     print(f"Saved to {overrides_path}\n")
 
 
+def fetch_picks_with_fallback(mid: int, mode: str, last_finished_gw: int,
+                               next_gw: int) -> tuple[dict | None, int | None]:
+    """Shared fallback chain used by both the main scoring loop and
+    --explain, so they can never drift apart on which GW's picks get used.
+    Returns (picks_data, gw_used); picks_data is None if nothing worked."""
+    picks_data = None
+    gw_used = None
+    if mode == "final":
+        picks_data = get_manager_picks(mid, next_gw)
+        gw_used = next_gw
+        if picks_data is None:
+            print(f"  GW{next_gw} picks not public yet (deadline hasn't "
+                  f"passed) -- falling back to GW{last_finished_gw}")
+    if picks_data is None and last_finished_gw > 0:
+        picks_data = get_manager_picks(mid, last_finished_gw)
+        gw_used = last_finished_gw
+    if picks_data is None and mode == "preview":
+        picks_data = get_manager_picks(mid, next_gw)
+        gw_used = next_gw
+    return picks_data, gw_used
+
+
+def explain_manager(picks_data: dict, gw_used: int, players: dict[int, dict],
+                     points: dict[int, float]) -> None:
+    """Prints every pick used to compute one manager's score -- player,
+    squad slot, points value used, captain/chip markers -- for debugging a
+    score that doesn't look right."""
+    chip = picks_data.get("active_chip")
+    print(f"GW{gw_used} squad (active_chip={chip}):")
+    for p in sorted(picks_data["picks"], key=lambda x: x["position"]):
+        el = players.get(p["element"])
+        name = f"{el['first_name']} {el['second_name']}" if el else f"element #{p['element']}"
+        pts = points.get(p["element"])
+        starter = "starter" if p["position"] <= 11 else "BENCH"
+        cap = " (C)" if p["is_captain"] else (" (VC)" if p["is_vice_captain"] else "")
+        pts_str = f"{pts:.2f}" if pts is not None else "NO PROJECTION FOUND"
+        print(f"  slot {p['position']:>2}  {starter:>7}  {name}{cap}: {pts_str}")
+    score = project_manager_score(picks_data, points)
+    print(f"\nComputed score: {score}")
+
+
 def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = None) -> None:
     """scores: [(manager_name, projected_score), ...]. Prints a suggested
     SKLW role assignment -- top scorers to GK+Strikers (both roles reward
@@ -525,6 +566,11 @@ def main():
     ap.add_argument("--list-transfers", action="store_true",
                      help="print all transfers recorded in overrides.json "
                           "this week (by player name), then exit.")
+    ap.add_argument("--explain", metavar="MANAGER_NAME",
+                     help="print the full player-by-player breakdown used "
+                          "to compute one manager's score (squad slot, "
+                          "points value, captain/chip), then exit -- for "
+                          "debugging a score that doesn't look right.")
     args = ap.parse_args()
 
     print_banner()
@@ -613,26 +659,21 @@ def main():
         else:
             print(f"No overrides file at {ov_path} -- using last-known squads as-is.")
 
+    if args.explain:
+        member_name, mid = resolve_manager(args.explain)
+        picks_data, gw_used = fetch_picks_with_fallback(mid, args.mode, last_finished_gw, next_gw)
+        if picks_data is None:
+            print(f"  {member_name}: could not fetch picks at all (bad manager ID?)")
+            return
+        if args.mode == "preview" and str(mid) in overrides:
+            picks_data = apply_overrides(picks_data, overrides[str(mid)])
+        print(f"\n=== {member_name} ===")
+        explain_manager(picks_data, gw_used, players, points)
+        return
+
     scores: list[tuple[str, float]] = []
     for name, mid in MANAGER_IDS.items():
-        picks_data = None
-        gw_used = None
-        if args.mode == "final":
-            picks_data = get_manager_picks(mid, next_gw)
-            gw_used = next_gw
-            if picks_data is None:
-                print(f"  {name}: GW{next_gw} picks not public yet "
-                      f"(deadline hasn't passed) -- falling back to GW{last_finished_gw}")
-        if picks_data is None and last_finished_gw > 0:
-            picks_data = get_manager_picks(mid, last_finished_gw)
-            gw_used = last_finished_gw
-        if picks_data is None and args.mode == "preview":
-            # No finished GW to fall back to (e.g. mid-GW1, nothing's
-            # finished yet) -- try the current/live GW's picks instead,
-            # which are public once its deadline has passed even in
-            # preview mode.
-            picks_data = get_manager_picks(mid, next_gw)
-            gw_used = next_gw
+        picks_data, gw_used = fetch_picks_with_fallback(mid, args.mode, last_finished_gw, next_gw)
 
         if picks_data is None:
             print(f"  {name}: could not fetch picks at all (bad manager ID?), skipping")
