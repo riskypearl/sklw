@@ -504,23 +504,23 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
         bench = ranked[14:16]
 
     print("\n=== Suggested SKLW lineup ===")
-    print("\nStrikers (want HIGH -- beat opponent's GK):")
+    print("\nStrikers:")
     for name, sc in strikers:
         if name in fh_striker_names:
             print(f"  {name}: FH")
         else:
             print(f"  {name}: {sc}")
-    print("\nGoalkeeper (want HIGH -- beat opponent's 2 strikers):")
+    print("\nGoalkeeper:")
     for name, sc in gk:
         if fh_gk and name == fh_gk[0]:
             print(f"  {name}: FH")
         else:
             print(f"  {name}: {sc}")
-    print("\nSquad (11, sum vs opponent's 11):")
+    print("\nSquad:")
     for name, sc in squad:
         print(f"  {name}: {sc}")
     print(f"  --> squad total: {sum(sc for _, sc in squad):.2f}")
-    print("\nBench (2, does not count):")
+    print("\nBench:")
     for name, sc in bench:
         print(f"  {name}: {sc}")
 
