@@ -97,14 +97,18 @@ def load_bootstrap() -> dict:
 
 def current_and_next_gw(bootstrap: dict) -> tuple[int, int]:
     """Returns (last_finished_gw, gw_to_project). The GW to project is the
-    LIVE one (is_current) when there is one -- mid-GW, FPL flags that GW as
-    is_current (not is_next) even though its deadline has already passed
-    and picks are public, so is_next alone would incorrectly skip ahead to
-    the GW AFTER the one that's actually in progress. Falls back to
-    is_next only between gameweeks (nothing currently live)."""
+    LIVE one (is_current AND NOT finished) when there is one -- mid-GW,
+    FPL flags that GW as is_current (not is_next) even though its deadline
+    has already passed and picks are public, so is_next alone would
+    incorrectly skip ahead to the GW AFTER the one that's actually in
+    progress. The 'not finished' check matters too: FPL can leave
+    is_current=True on a GW for a while after finished flips to True (the
+    live-to-next-GW transition lags), so trusting is_current alone would
+    keep targeting a GW that's already over instead of moving on. Falls
+    back to is_next between gameweeks (nothing currently live)."""
     events = bootstrap["events"]
     finished = [e for e in events if e["finished"]]
-    current_ev = next((e for e in events if e["is_current"]), None)
+    current_ev = next((e for e in events if e["is_current"] and not e["finished"]), None)
     next_ev = next((e for e in events if e["is_next"]), None)
     last_finished_id = finished[-1]["id"] if finished else 0
     target_ev = current_ev or next_ev
