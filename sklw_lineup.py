@@ -383,8 +383,21 @@ def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[li
     minor OCR misreads, discarding anything that doesn't match closely
     enough as noise (club badges, point totals, position labels, 'C'/'V'
     captain markers, headers). Returns (element_ids, unmatched_lines)."""
+    import shutil
     import pytesseract
     from PIL import Image
+
+    if not shutil.which("tesseract"):
+        # Tesseract not on PATH -- try the standard Windows install
+        # location before giving up, since forgetting to add it to PATH
+        # (separate from the pip packages) is a common gotcha.
+        for candidate in (
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ):
+            if Path(candidate).exists():
+                pytesseract.pytesseract.tesseract_cmd = candidate
+                break
 
     img = Image.open(image_path)
     raw_text = pytesseract.image_to_string(img)
