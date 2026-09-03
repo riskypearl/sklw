@@ -399,12 +399,40 @@ def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[li
                 pytesseract.pytesseract.tesseract_cmd = candidate
                 break
 
-    img = Image.open(image_path)
-    raw_text = pytesseract.image_to_string(img)
-    lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+    img = Image.open(image_path).convert("L")  # grayscale -- helps contrast
+    # Small text (like pitch-view name tags) OCRs much better upscaled.
+    scale = 3 if max(img.size) < 1600 else 1
+    if scale > 1:
+        img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
+    # Binarize (pure black/white) -- helps Tesseract isolate small text
+    # sitting on a clean tag background from a busy graphic behind it.
+    img = img.point(lambda p: 255 if p > 140 else 0)
+
+    # PSM 11 = "sparse text: find as much text as possible in no
+    # particular order" -- the default mode assumes a normal document
+    # layout and can find NOTHING in an image with text scattered across
+    # jersey icons/badges/a pitch graphic (pitch view) rather than a
+    # single readable block, since it misjudges the whole thing as
+    # non-text. Sparse mode searches everywhere instead of giving up.
+    #
+    # image_to_data (word-level tokens with positions), not
+    # image_to_string (merged lines): a dense pitch-view row can OCR as
+    # ONE run-together line ("Raya Dubravka Calafiori Konsa Ajer") --
+    # matching only the first name found per line and moving on would
+    # silently lose every other real name packed into that same line.
+    # Word-level tokens don't have this problem, each word (or short
+    # multi-word span, for 2-3 word surnames) is checked independently.
+    words = pytesseract.image_to_data(img, config="--psm 11", output_type=pytesseract.Output.DICT)["text"]
+    words = [w.strip() for w in words if w.strip()]
+    if not words:
+        # PSM 11 found nothing either -- fall back to the default mode in
+        # case this particular image DOES have a normal-document layout
+        # (e.g. list view) that PSM 11 handles worse than PSM 3 does.
+        words = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)["text"]
+        words = [w.strip() for w in words if w.strip()]
 
     # Longest web_name first, so a longer/more specific match wins over a
-    # short substring coincidence (e.g. "Rice" inside an unrelated line).
+    # short substring coincidence (e.g. "Rice" inside an unrelated word).
     by_name = sorted(
         ((_fold(p["web_name"]), p["id"]) for p in bootstrap["elements"] if len(p["web_name"]) >= 3),
         key=lambda x: -len(x[0]),
@@ -414,37 +442,30 @@ def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[li
 
     found: dict[int, str] = {}
     unmatched: list[str] = []
-    for line in lines:
-        folded_line = _fold(line)
-        matched_name = next((n for n in all_folded_names if n in folded_line), None)
-        if matched_name:
-            pid = name_to_id[matched_name]
-            found.setdefault(pid, line)
+    for start in range(len(words)):
+        matched = False
+        for span in (1, 2, 3):  # player surnames are usually 1-3 tokens
+            chunk = " ".join(words[start:start + span])
+            folded_chunk = _fold(chunk)
+            exact = next((n for n in all_folded_names if n in folded_chunk), None)
+            if exact:
+                pid = name_to_id[exact]
+                found.setdefault(pid, chunk)
+                matched = True
+                break
+        if matched:
             continue
 
-        # Fuzzy fallback for minor OCR misreads -- tries contiguous 1-3
-        # word spans (player surnames are usually 1-3 tokens) rather than
-        # the whole line, so a misread name isn't drowned out by
-        # surrounding noise (position code, team code, point total).
-        words = line.split()
-        fuzzy_hit = None
-        for start in range(len(words)):
-            for span in (1, 2, 3):
-                chunk = " ".join(words[start:start + span])
-                candidate = "".join(c for c in chunk if c.isalpha() or c in " -'.").strip()
-                if len(candidate) < 3:
-                    continue
-                close = difflib.get_close_matches(_fold(candidate), all_folded_names, n=1, cutoff=0.82)
-                if close:
-                    fuzzy_hit = close[0]
-                    break
-            if fuzzy_hit:
-                break
-        if fuzzy_hit:
-            pid = name_to_id[fuzzy_hit]
-            found.setdefault(pid, f"{line} (fuzzy match)")
-            continue
-        unmatched.append(line)
+        # Fuzzy fallback for minor OCR misreads, on the single word only
+        # (extending to multi-word spans here risks matching noise).
+        candidate = "".join(c for c in words[start] if c.isalpha() or c in "-'.").strip()
+        if len(candidate) >= 3:
+            close = difflib.get_close_matches(_fold(candidate), all_folded_names, n=1, cutoff=0.82)
+            if close:
+                pid = name_to_id[close[0]]
+                found.setdefault(pid, f"{words[start]} (fuzzy match)")
+                continue
+        unmatched.append(words[start])
 
     return list(found.keys()), unmatched
 
