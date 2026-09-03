@@ -347,6 +347,41 @@ def apply_overrides(picks_data: dict, override: dict) -> dict:
     return {**picks_data, "picks": picks}
 
 
+def apply_wildcard(picks_data: dict, wildcard_ids: list[int]) -> dict:
+    """Replaces the ENTIRE squad with wildcard_ids (15 element IDs) --
+    unlike apply_overrides' like-for-like out/in swap, a Wildcard rebuilds
+    most/all of the squad at once, so there's no meaningful old-slot to
+    carry captaincy/multiplier from. Assigns arbitrary squad positions
+    1-15 and multiplier 1 throughout, is meant to be paired with best-xi
+    scoring (which recomputes the actual best formation/captain from
+    scratch), not the real submitted-picks scoring."""
+    picks = [{"element": eid, "position": i + 1, "multiplier": 1,
+              "is_captain": False, "is_vice_captain": False}
+             for i, eid in enumerate(wildcard_ids)]
+    return {**picks_data, "picks": picks, "active_chip": "wildcard"}
+
+
+def record_wildcard(overrides_path: Path, bootstrap: dict, manager_name: str,
+                     manager_id: int, squad_fragments: str) -> None:
+    """Resolves a full 15-name squad and saves it as that manager's
+    'wildcard' entry in overrides.json (creating/overwriting it) --
+    replaces the whole squad rather than an incremental out/in swap,
+    since a Wildcard rebuilds most/all of it at once."""
+    ids = resolve_players(bootstrap, squad_fragments)
+    if len(ids) != 15:
+        print(f"ERROR: --squad must list exactly 15 players, got {len(ids)}")
+        sys.exit(1)
+
+    all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
+    all_overrides[str(manager_id)] = {"wildcard": ids}
+    overrides_path.write_text(json.dumps(all_overrides, indent=2))
+
+    players = player_lookup(bootstrap)
+    names = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in ids)
+    print(f"Recorded Wildcard squad for {manager_name}: {names}")
+    print(f"Saved to {overrides_path}\n")
+
+
 def resolve_manager(name: str) -> tuple[str, int]:
     """Case-insensitive exact match against MANAGER_IDS' keys."""
     for member_name, mid in MANAGER_IDS.items():
@@ -762,6 +797,16 @@ def main():
     ap.add_argument("--in", dest="in_", help="comma-separated player name "
                                    "fragment(s) being transferred in, same "
                                    "order as --out (with --transfer)")
+    ap.add_argument("--wildcard", metavar="MANAGER_NAME",
+                     help="record a Wildcard squad for this club member --"
+                          " replaces their ENTIRE squad (unlike --transfer's "
+                          "incremental out/in swap), since Wildcard rebuilds "
+                          "most/all of it at once. Requires --squad with "
+                          "exactly 15 names. Scored via --best-xi logic "
+                          "automatically, since the real starting-11/captain "
+                          "choice for a wildcarded squad isn't known.")
+    ap.add_argument("--squad", help="comma-separated list of exactly 15 "
+                                     "player name fragments (with --wildcard)")
     ap.add_argument("--fh", action="append", metavar="MANAGER_NAME",
                      help="mark this club member as playing Free Hit this "
                           "GW -- forces them into the GK slot in the "
@@ -837,6 +882,16 @@ def main():
               "lineup once you're done recording transfers.")
         return
 
+    if args.wildcard:
+        if not args.squad:
+            print("ERROR: --wildcard requires --squad with exactly 15 names")
+            sys.exit(1)
+        member_name, mid = resolve_manager(args.wildcard)
+        record_wildcard(Path(args.overrides), bootstrap, member_name, mid, args.squad)
+        print("Run 'run.bat --mode preview' separately to see the updated "
+              "lineup once you're done recording Wildcard squads.")
+        return
+
     if args.list_transfers:
         ov_path = Path(args.overrides)
         if not ov_path.exists():
@@ -850,6 +905,12 @@ def main():
         print("=== Transfers recorded this week ===")
         for mid_str, entry in overrides.items():
             manager_name = id_to_name.get(int(mid_str), f"manager {mid_str}")
+            if "wildcard" in entry:
+                squad_names = ", ".join(
+                    f"{players[i]['first_name']} {players[i]['second_name']}"
+                    if i in players else f"#{i}" for i in entry["wildcard"])
+                print(f"  {manager_name}: WILDCARD [{squad_names}]")
+                continue
             out_names = ", ".join(
                 f"{players[i]['first_name']} {players[i]['second_name']}"
                 if i in players else f"#{i}" for i in entry.get("out", []))
@@ -969,7 +1030,9 @@ def main():
             print(f"  {member_name}: could not fetch picks at all (bad manager ID?)")
             return
         if args.mode == "preview" and str(mid) in overrides:
-            picks_data = apply_overrides(picks_data, overrides[str(mid)])
+            entry = overrides[str(mid)]
+            picks_data = apply_wildcard(picks_data, entry["wildcard"]) if "wildcard" in entry \
+                else apply_overrides(picks_data, entry)
         print(f"\n=== {member_name} ===")
         explain_manager(picks_data, gw_used, players, points)
         return
@@ -994,7 +1057,12 @@ def main():
         use_best_xi = args.best_xi or (gw_used != next_gw)
 
         if args.mode == "preview" and str(mid) in overrides:
-            picks_data = apply_overrides(picks_data, overrides[str(mid)])
+            entry = overrides[str(mid)]
+            if "wildcard" in entry:
+                picks_data = apply_wildcard(picks_data, entry["wildcard"])
+                use_best_xi = True  # real starting-11/captain for a wildcarded squad isn't known
+            else:
+                picks_data = apply_overrides(picks_data, entry)
 
         if use_best_xi:
             score = project_best_xi_score(picks_data, players, points)
