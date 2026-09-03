@@ -789,7 +789,11 @@ def main():
         else:
             screenshot_path = Path(args.from_screenshot)
         element_ids, unmatched = extract_squad_from_screenshot(screenshot_path, bootstrap)
-        print(f"\nMatched {len(element_ids)} player(s) from the screenshot.")
+        print(f"\nMatched {len(element_ids)} player(s) from the screenshot:")
+        for eid in element_ids:
+            el = players.get(eid)
+            name = f"{el['first_name']} {el['second_name']}" if el else f"element #{eid}"
+            print(f"  {name}")
         if unmatched:
             shown = ", ".join(unmatched[:10]) + (" ..." if len(unmatched) > 10 else "")
             print(f"  {len(unmatched)} word(s) didn't match any player "
