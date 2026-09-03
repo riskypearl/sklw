@@ -400,14 +400,22 @@ def _match_words_to_players(words: list[str], bootstrap: dict) -> tuple[dict[int
     ({element_id: matched_text}, unmatched_words)."""
     # Longest web_name first, so a longer/more specific match wins over a
     # short substring coincidence (e.g. "Rice" inside an unrelated word).
+    # Multiple real players can share a web_name (e.g. more than one real
+    # "Palmer") -- name_to_ids maps to a LIST, and an ambiguous hit (more
+    # than one id) is treated as no match rather than silently guessing
+    # which one, since there's no team/club context available here to
+    # disambiguate (unlike the Solio CSV loader, which has a Team column).
     by_name = sorted(
         ((_fold(p["web_name"]), p["id"]) for p in bootstrap["elements"] if len(p["web_name"]) >= 3),
         key=lambda x: -len(x[0]),
     )
-    all_folded_names = [n for n, _ in by_name]
-    name_to_id = dict(by_name)
+    all_folded_names = list(dict.fromkeys(n for n, _ in by_name))  # de-duped, longest first
+    name_to_ids: dict[str, list[int]] = {}
+    for n, pid in by_name:
+        name_to_ids.setdefault(n, []).append(pid)
 
     found: dict[int, str] = {}
+    ambiguous: list[str] = []
     unmatched: list[str] = []
     for start in range(len(words)):
         matched = False
@@ -416,23 +424,34 @@ def _match_words_to_players(words: list[str], bootstrap: dict) -> tuple[dict[int
             folded_chunk = _fold(chunk)
             exact = next((n for n in all_folded_names if n in folded_chunk), None)
             if exact:
-                pid = name_to_id[exact]
-                found.setdefault(pid, chunk)
+                ids = name_to_ids[exact]
+                if len(ids) > 1:
+                    ambiguous.append(f"{chunk} (matches {len(ids)} real players, skipped)")
+                else:
+                    found.setdefault(ids[0], chunk)
                 matched = True
                 break
         if matched:
             continue
 
+        # Fuzzy fallback for minor OCR misreads. Cutoff set high (0.88)
+        # specifically because a looser one (0.82) produced a real false
+        # positive in testing -- garbled noise fuzzy-matched a real but
+        # entirely unrelated player, which is worse than just missing a
+        # name outright (the "type in missing names" prompt covers a miss).
         candidate = "".join(c for c in words[start] if c.isalpha() or c in "-'.").strip()
         if len(candidate) >= 3:
-            close = difflib.get_close_matches(_fold(candidate), all_folded_names, n=1, cutoff=0.82)
+            close = difflib.get_close_matches(_fold(candidate), all_folded_names, n=1, cutoff=0.88)
             if close:
-                pid = name_to_id[close[0]]
-                found.setdefault(pid, f"{words[start]} (fuzzy match)")
+                ids = name_to_ids[close[0]]
+                if len(ids) > 1:
+                    ambiguous.append(f"{words[start]} (fuzzy, matches {len(ids)} real players, skipped)")
+                else:
+                    found.setdefault(ids[0], f"{words[start]} (fuzzy match)")
                 continue
         unmatched.append(words[start])
 
-    return found, unmatched
+    return found, ambiguous + unmatched
 
 
 def _prep_image(img):
