@@ -230,6 +230,21 @@ def find_solio_csv() -> Path | None:
     return None
 
 
+def find_latest_screenshot() -> Path | None:
+    """Finds the most recently added image in the user's Downloads folder
+    -- lets --from-screenshot (no path given) work as "drop a screenshot
+    in Downloads and run", same auto-detect pattern as find_solio_csv()."""
+    downloads = Path.home() / "Downloads"
+    if not downloads.is_dir():
+        return None
+    candidates = []
+    for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp", "*.bmp"):
+        candidates.extend(downloads.glob(ext))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
 def pick_best_eleven(picks_data: dict, players: dict[int, dict],
                       points: dict[int, float]) -> tuple[list[int], int | None]:
     """Given a manager's full 15-man squad, picks the highest-projected
@@ -633,16 +648,20 @@ def main():
                           "to compute one manager's score (squad slot, "
                           "points value, captain/chip), then exit -- for "
                           "debugging a score that doesn't look right.")
-    ap.add_argument("--from-screenshot", metavar="IMAGE_PATH",
+    ap.add_argument("--from-screenshot", metavar="IMAGE_PATH", nargs="?", const="AUTO",
                      help="OCR a squad screenshot (pitch or list view) "
                           "instead of pulling live picks, and print the "
                           "predicted best-XI/captain from it using current "
-                          "projections. Requires 'pip install pytesseract "
-                          "pillow' plus the Tesseract OCR binary installed "
-                          "separately (not a pip package). List-view "
-                          "screenshots OCR far more reliably than pitch "
-                          "view -- clean text rows vs small text scattered "
-                          "over colored jersey icons.")
+                          "projections. Omit the path to auto-detect the "
+                          "most recently added image in your Downloads "
+                          "folder (drop a screenshot there and just pass "
+                          "--from-screenshot with nothing after it). "
+                          "Requires 'pip install pytesseract pillow' plus "
+                          "the Tesseract OCR binary installed separately "
+                          "(not a pip package). List-view screenshots OCR "
+                          "far more reliably than pitch view -- clean text "
+                          "rows vs small text scattered over colored "
+                          "jersey icons.")
     args = ap.parse_args()
 
     print_banner()
@@ -720,7 +739,17 @@ def main():
               "to use a specific file.")
 
     if args.from_screenshot:
-        element_ids, unmatched = extract_squad_from_screenshot(Path(args.from_screenshot), bootstrap)
+        if args.from_screenshot == "AUTO":
+            screenshot_path = find_latest_screenshot()
+            if screenshot_path is None:
+                print("ERROR: no image found in your Downloads folder. "
+                      "Save/drop a screenshot there, or pass "
+                      "--from-screenshot <path> explicitly.")
+                return
+            print(f"Using most recently added screenshot: {screenshot_path}")
+        else:
+            screenshot_path = Path(args.from_screenshot)
+        element_ids, unmatched = extract_squad_from_screenshot(screenshot_path, bootstrap)
         print(f"\nMatched {len(element_ids)} player(s) from the screenshot.")
         if unmatched:
             shown = ", ".join(unmatched[:10]) + (" ..." if len(unmatched) > 10 else "")
