@@ -792,8 +792,20 @@ def main():
         print(f"\nMatched {len(element_ids)} player(s) from the screenshot.")
         if unmatched:
             shown = ", ".join(unmatched[:10]) + (" ..." if len(unmatched) > 10 else "")
-            print(f"  {len(unmatched)} line(s) didn't match any player "
+            print(f"  {len(unmatched)} word(s) didn't match any player "
                   f"(likely noise -- badges, point totals, headers): {shown}")
+
+        if len(element_ids) < 15:
+            print(f"\n{len(element_ids)}/15 matched. Type in any missing "
+                  f"player name(s) to fill the gaps (comma-separated), or "
+                  f"press Enter to continue with just what was found.")
+            typed = input("Missing player name(s): ").strip()
+            if typed:
+                for eid in resolve_players(bootstrap, typed):
+                    if eid not in element_ids:
+                        element_ids.append(eid)
+                print(f"Now have {len(element_ids)}/15 players.")
+
         if len(element_ids) < 11:
             print(f"ERROR: only matched {len(element_ids)} players, need at "
                   f"least 11 for a valid XI. Try a clearer screenshot -- "
