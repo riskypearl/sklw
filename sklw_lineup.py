@@ -375,17 +375,9 @@ def resolve_players(bootstrap: dict, fragments: str) -> list[int]:
     return ids
 
 
-def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[list[int], list[str]]:
-    """OCR's an FPL squad screenshot (pitch or list view) and matches
-    detected text against the real bootstrap player list to recover a
-    squad's element IDs. Doesn't require a perfect text read -- tries
-    exact/substring matching first, then a fuzzy near-match fallback for
-    minor OCR misreads, discarding anything that doesn't match closely
-    enough as noise (club badges, point totals, position labels, 'C'/'V'
-    captain markers, headers). Returns (element_ids, unmatched_lines)."""
+def _setup_tesseract() -> None:
     import shutil
     import pytesseract
-    from PIL import Image
 
     if not shutil.which("tesseract"):
         # Tesseract not on PATH -- try the standard Windows install
@@ -399,38 +391,13 @@ def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[li
                 pytesseract.pytesseract.tesseract_cmd = candidate
                 break
 
-    img = Image.open(image_path).convert("L")  # grayscale -- helps contrast
-    # Small text (like pitch-view name tags) OCRs much better upscaled.
-    scale = 3 if max(img.size) < 1600 else 1
-    if scale > 1:
-        img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
-    # Binarize (pure black/white) -- helps Tesseract isolate small text
-    # sitting on a clean tag background from a busy graphic behind it.
-    img = img.point(lambda p: 255 if p > 140 else 0)
 
-    # PSM 11 = "sparse text: find as much text as possible in no
-    # particular order" -- the default mode assumes a normal document
-    # layout and can find NOTHING in an image with text scattered across
-    # jersey icons/badges/a pitch graphic (pitch view) rather than a
-    # single readable block, since it misjudges the whole thing as
-    # non-text. Sparse mode searches everywhere instead of giving up.
-    #
-    # image_to_data (word-level tokens with positions), not
-    # image_to_string (merged lines): a dense pitch-view row can OCR as
-    # ONE run-together line ("Raya Dubravka Calafiori Konsa Ajer") --
-    # matching only the first name found per line and moving on would
-    # silently lose every other real name packed into that same line.
-    # Word-level tokens don't have this problem, each word (or short
-    # multi-word span, for 2-3 word surnames) is checked independently.
-    words = pytesseract.image_to_data(img, config="--psm 11", output_type=pytesseract.Output.DICT)["text"]
-    words = [w.strip() for w in words if w.strip()]
-    if not words:
-        # PSM 11 found nothing either -- fall back to the default mode in
-        # case this particular image DOES have a normal-document layout
-        # (e.g. list view) that PSM 11 handles worse than PSM 3 does.
-        words = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)["text"]
-        words = [w.strip() for w in words if w.strip()]
-
+def _match_words_to_players(words: list[str], bootstrap: dict) -> tuple[dict[int, str], list[str]]:
+    """Shared matching step: given a flat list of OCR'd word tokens, tries
+    exact/substring matching first (contiguous 1-3 word spans, since
+    player surnames are usually 1-3 tokens), then a fuzzy near-match
+    fallback per single word for minor OCR misreads. Returns
+    ({element_id: matched_text}, unmatched_words)."""
     # Longest web_name first, so a longer/more specific match wins over a
     # short substring coincidence (e.g. "Rice" inside an unrelated word).
     by_name = sorted(
@@ -444,7 +411,7 @@ def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[li
     unmatched: list[str] = []
     for start in range(len(words)):
         matched = False
-        for span in (1, 2, 3):  # player surnames are usually 1-3 tokens
+        for span in (1, 2, 3):
             chunk = " ".join(words[start:start + span])
             folded_chunk = _fold(chunk)
             exact = next((n for n in all_folded_names if n in folded_chunk), None)
@@ -456,8 +423,6 @@ def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[li
         if matched:
             continue
 
-        # Fuzzy fallback for minor OCR misreads, on the single word only
-        # (extending to multi-word spans here risks matching noise).
         candidate = "".join(c for c in words[start] if c.isalpha() or c in "-'.").strip()
         if len(candidate) >= 3:
             close = difflib.get_close_matches(_fold(candidate), all_folded_names, n=1, cutoff=0.82)
@@ -467,6 +432,120 @@ def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[li
                 continue
         unmatched.append(words[start])
 
+    return found, unmatched
+
+
+def _prep_image(img):
+    """Grayscale + upscale -- small pitch-view name-tag text OCRs much
+    better this way than the raw screenshot. Deliberately does NOT
+    binarize (hard black/white threshold): tested against a small isolated
+    crop and it actively destroyed the text -- upscaling a small font
+    leaves anti-aliased gray edges, and a hard threshold breaks thin
+    strokes rather than cleaning them up. Grayscale alone reads correctly
+    where binarized failed outright."""
+    from PIL import Image
+    img = img.convert("L")
+    scale = 3 if max(img.size) < 1600 else 1
+    if scale > 1:
+        img = img.resize((img.width * scale, img.height * scale), Image.LANCZOS)
+    return img
+
+
+def _ocr_words(img) -> list[str]:
+    import pytesseract
+    # PSM 11 = "sparse text: find as much text as possible in no
+    # particular order" -- the default mode assumes a normal document
+    # layout and can find NOTHING in an image with text scattered across
+    # jersey icons/badges/a pitch graphic (pitch view) rather than a
+    # single readable block, since it misjudges the whole thing as
+    # non-text. Sparse mode searches everywhere instead of giving up.
+    words = pytesseract.image_to_data(img, config="--psm 11", output_type=pytesseract.Output.DICT)["text"]
+    words = [w.strip() for w in words if w.strip()]
+    if not words:
+        # PSM 11 found nothing either -- fall back to the default mode in
+        # case this particular image DOES have a normal-document layout
+        # (e.g. list view) that PSM 11 handles worse than PSM 3 does.
+        words = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)["text"]
+        words = [w.strip() for w in words if w.strip()]
+    return words
+
+
+def _ocr_single_line(img) -> list[str]:
+    """For a small crop expected to contain exactly one line of text (one
+    player's name tag). Tested against real crops: no single PSM mode
+    reliably won -- PSM 7 ("single line") caught some names PSM 8 missed
+    and vice versa, seemingly depending on exact text length/kerning
+    within the crop, so this tries several modes and keeps whatever any
+    of them found rather than betting on one."""
+    import pytesseract
+    words: list[str] = []
+    for psm in (7, 8, 6):
+        text = pytesseract.image_to_string(img, config=f"--psm {psm}").strip()
+        if text:
+            words.extend(text.split())
+    return words
+
+
+# Known layout of the "15-man pitch view" screenshot template: 4 rows
+# (GK, DEF, MID, FWD) with a fixed player count each, name tag roughly at
+# this fractional (x, y) position within each row -- estimated visually
+# from a real example, not pixel-measured, so treated as a rough starting
+# point rather than exact truth (see extract_squad_grid_crop's caller for
+# how this gets combined with whole-image OCR rather than trusted alone).
+PITCH_VIEW_ROWS = [
+    (0.26, [0.355, 0.665]),               # GK: 2 players
+    (0.50, [0.19, 0.355, 0.51, 0.665, 0.82]),  # DEF: 5 players
+    (0.74, [0.19, 0.355, 0.51, 0.665, 0.82]),  # MID: 5 players
+    (0.94, [0.355, 0.51, 0.665]),         # FWD: 3 players
+]
+
+
+def extract_squad_grid_crop(image_path: Path, bootstrap: dict) -> tuple[dict[int, str], list[str]]:
+    """Crops a small isolated region around each expected name-tag
+    position in the known 15-man pitch-view layout (PITCH_VIEW_ROWS) and
+    OCRs each crop separately -- isolated small crops of clean text are
+    far easier for Tesseract than the whole busy graphic-heavy
+    screenshot at once. Returns ({element_id: matched_text}, unmatched)."""
+    from PIL import Image
+
+    img = Image.open(image_path).convert("RGB")
+    w, h = img.size
+    words: list[str] = []
+    for y_frac, x_fracs in PITCH_VIEW_ROWS:
+        for x_frac in x_fracs:
+            cx, cy = x_frac * w, y_frac * h
+            box_w, box_h = 0.22 * w, 0.09 * h
+            crop = img.crop((cx - box_w / 2, cy - box_h / 2, cx + box_w / 2, cy + box_h / 2))
+            crop = _prep_image(crop)
+            words.extend(_ocr_single_line(crop))
+    return _match_words_to_players(words, bootstrap)
+
+
+def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[list[int], list[str]]:
+    """OCR's an FPL squad screenshot (pitch or list view) and matches
+    detected text against the real bootstrap player list to recover a
+    squad's element IDs. Runs two passes and merges the results: whole-
+    image OCR (works for any layout, including list view) and, since the
+    pitch-view screenshot is always the same known template, a grid-crop
+    pass that OCRs each expected name-tag position in isolation (more
+    reliable per-name, but only applies to that one template -- if this
+    isn't a pitch-view screenshot the grid crops just won't find real
+    names there and contribute nothing). Doesn't require a perfect text
+    read either way -- exact/substring match first, fuzzy fallback for
+    minor misreads, anything that doesn't match closely enough is
+    reported as unmatched rather than guessed at. Returns (element_ids,
+    unmatched_words -- deduplicated across both passes)."""
+    _setup_tesseract()
+
+    from PIL import Image
+    whole_img = _prep_image(Image.open(image_path).convert("L"))
+    whole_words = _ocr_words(whole_img)
+    found_whole, unmatched_whole = _match_words_to_players(whole_words, bootstrap)
+
+    found_grid, unmatched_grid = extract_squad_grid_crop(image_path, bootstrap)
+
+    found = {**found_whole, **found_grid}
+    unmatched = sorted(set(unmatched_whole) & set(unmatched_grid))  # only if BOTH passes failed on it
     return list(found.keys()), unmatched
 
 
