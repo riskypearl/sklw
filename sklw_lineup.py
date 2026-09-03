@@ -772,7 +772,12 @@ def main():
         if args.screenshot_for:
             label, _ = resolve_manager(args.screenshot_for)
         else:
-            label = None
+            names = list(MANAGER_IDS.keys())
+            print("\nWhich manager is this screenshot for?")
+            for i, name in enumerate(names, 1):
+                print(f"  {i}. {name}")
+            choice = input("Enter a number (or press Enter to skip): ").strip()
+            label = names[int(choice) - 1] if choice.isdigit() and 1 <= int(choice) <= len(names) else None
 
         picks_data = {"picks": [{"element": eid} for eid in element_ids]}
         starters, captain = pick_best_eleven(picks_data, players, points)
