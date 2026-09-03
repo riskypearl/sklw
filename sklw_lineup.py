@@ -662,6 +662,11 @@ def main():
                           "far more reliably than pitch view -- clean text "
                           "rows vs small text scattered over colored "
                           "jersey icons.")
+    ap.add_argument("--for", dest="screenshot_for", metavar="MANAGER_NAME",
+                     help="label the --from-screenshot output with this "
+                          "club member's name (must be a known name from "
+                          "MANAGER_IDS). Purely a label -- doesn't fetch "
+                          "or override anything for that manager.")
     args = ap.parse_args()
 
     print_banner()
@@ -764,10 +769,16 @@ def main():
             print(f"WARNING: matched {len(element_ids)} players, more than "
                   f"a 15-man squad -- some matches may be false positives.")
 
+        if args.screenshot_for:
+            label, _ = resolve_manager(args.screenshot_for)
+        else:
+            label = None
+
         picks_data = {"picks": [{"element": eid} for eid in element_ids]}
         starters, captain = pick_best_eleven(picks_data, players, points)
         score = project_best_xi_score(picks_data, players, points)
-        print("\n=== Predicted best XI from screenshot ===")
+        header = f"Predicted best XI from screenshot: {label}" if label else "Predicted best XI from screenshot"
+        print(f"\n=== {header} ===")
         for eid in starters:
             el = players.get(eid)
             name = f"{el['first_name']} {el['second_name']}" if el else f"element #{eid}"
