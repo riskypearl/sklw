@@ -421,9 +421,19 @@ def _match_words_to_players(words: list[str], bootstrap: dict) -> tuple[dict[int
         matched = False
         for span in (1, 2, 3):
             chunk = " ".join(words[start:start + span])
-            folded_chunk = _fold(chunk)
-            exact = next((n for n in all_folded_names if n in folded_chunk), None)
-            if exact:
+            # Strip stray digits/symbols (price tags, remove-button
+            # glyphs, etc. that OCR can merge into an adjacent word)
+            # BEFORE the substring check -- without this, leftover noise
+            # could form an accidental substring match against an
+            # unrelated short real name (found in testing: this was
+            # letting the exact pass match names it shouldn't have).
+            cleaned_chunk = _fold("".join(c for c in chunk if c.isalpha() or c in " -'."))
+            exact = next((n for n in all_folded_names if n in cleaned_chunk), None)
+            # Also require the matched name to be a substantial fraction
+            # of the cleaned chunk, not a short name buried in a much
+            # longer garbled string -- same false-positive-vs-miss
+            # tradeoff as the fuzzy cutoff below.
+            if exact and len(exact) >= 0.6 * len(cleaned_chunk):
                 ids = name_to_ids[exact]
                 if len(ids) > 1:
                     ambiguous.append(f"{chunk} (matches {len(ids)} real players, skipped)")
