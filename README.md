@@ -132,6 +132,46 @@ want to skip the fetch step entirely and just re-run projections against
 the CSV you already have, call the script directly instead:
 `venv\Scripts\python.exe sklw_lineup.py` (or `draft_lineup.py`).
 
+### Reading a squad from a screenshot (`--from-screenshot`)
+
+For a manager whose squad you only have as a screenshot (pitch view or
+list view) rather than pulling live via the API: `--from-screenshot
+path/to/image.png` OCRs it, matches whatever text it finds against the
+real FPL player list, and prints the predicted best-XI/captain from that
+squad using current projections (`ep_next` or `--projections`/auto-detected
+Solio CSV). It does NOT try to detect who was actually captained/benched
+from badges or icons in the image — it just extracts the 15-man squad and
+lets the existing best-XI logic (same as `--best-xi`) work out the
+predicted starting 11 + captain from current projections.
+
+Setup (one-time):
+```
+pip install pytesseract pillow
+```
+Also needs the Tesseract OCR binary itself (not a pip package) —
+on Windows, install it from
+[UB-Mannheim's Tesseract installer](https://github.com/UB-Mannheim/tesseract/wiki)
+and make sure `tesseract.exe` is on your PATH (or point `pytesseract`
+at it directly — see pytesseract's docs if it can't find it automatically).
+
+Usage:
+```
+run.bat --from-screenshot path\to\screenshot.png
+```
+
+Matching is deliberately conservative — it tries an exact/substring match
+against real player names first, then a fuzzy near-match fallback for
+minor OCR misreads, and anything that doesn't match closely enough is
+reported as an unmatched line rather than guessed at, so it's obvious
+when the screenshot needs to be clearer rather than silently getting a
+player wrong. **List view OCRs far more reliably than pitch view** —
+clean rows of text vs small text scattered over colored jersey icons —
+so prefer list view where possible. Tested end-to-end against a
+synthetic test image with correct matching logic and zero false
+positives, but not yet verified against a real FPL screenshot — treat
+the first real run with normal skepticism and report back anything that
+looks wrong.
+
 `--best-xi` is a one-off comparison: instead of trusting each manager's
 actual submitted starting-11/captain, it scores them using the
 highest-projected VALID XI (real FPL formation rules — 1 GK, 3–5 DEF,

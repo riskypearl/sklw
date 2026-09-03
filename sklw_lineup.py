@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import difflib
 import json
 import sys
 import unicodedata
@@ -359,6 +360,67 @@ def resolve_players(bootstrap: dict, fragments: str) -> list[int]:
     return ids
 
 
+def extract_squad_from_screenshot(image_path: Path, bootstrap: dict) -> tuple[list[int], list[str]]:
+    """OCR's an FPL squad screenshot (pitch or list view) and matches
+    detected text against the real bootstrap player list to recover a
+    squad's element IDs. Doesn't require a perfect text read -- tries
+    exact/substring matching first, then a fuzzy near-match fallback for
+    minor OCR misreads, discarding anything that doesn't match closely
+    enough as noise (club badges, point totals, position labels, 'C'/'V'
+    captain markers, headers). Returns (element_ids, unmatched_lines)."""
+    import pytesseract
+    from PIL import Image
+
+    img = Image.open(image_path)
+    raw_text = pytesseract.image_to_string(img)
+    lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+
+    # Longest web_name first, so a longer/more specific match wins over a
+    # short substring coincidence (e.g. "Rice" inside an unrelated line).
+    by_name = sorted(
+        ((_fold(p["web_name"]), p["id"]) for p in bootstrap["elements"] if len(p["web_name"]) >= 3),
+        key=lambda x: -len(x[0]),
+    )
+    all_folded_names = [n for n, _ in by_name]
+    name_to_id = dict(by_name)
+
+    found: dict[int, str] = {}
+    unmatched: list[str] = []
+    for line in lines:
+        folded_line = _fold(line)
+        matched_name = next((n for n in all_folded_names if n in folded_line), None)
+        if matched_name:
+            pid = name_to_id[matched_name]
+            found.setdefault(pid, line)
+            continue
+
+        # Fuzzy fallback for minor OCR misreads -- tries contiguous 1-3
+        # word spans (player surnames are usually 1-3 tokens) rather than
+        # the whole line, so a misread name isn't drowned out by
+        # surrounding noise (position code, team code, point total).
+        words = line.split()
+        fuzzy_hit = None
+        for start in range(len(words)):
+            for span in (1, 2, 3):
+                chunk = " ".join(words[start:start + span])
+                candidate = "".join(c for c in chunk if c.isalpha() or c in " -'.").strip()
+                if len(candidate) < 3:
+                    continue
+                close = difflib.get_close_matches(_fold(candidate), all_folded_names, n=1, cutoff=0.82)
+                if close:
+                    fuzzy_hit = close[0]
+                    break
+            if fuzzy_hit:
+                break
+        if fuzzy_hit:
+            pid = name_to_id[fuzzy_hit]
+            found.setdefault(pid, f"{line} (fuzzy match)")
+            continue
+        unmatched.append(line)
+
+    return list(found.keys()), unmatched
+
+
 def record_transfer(overrides_path: Path, bootstrap: dict, manager_name: str,
                      manager_id: int, out_fragments: str, in_fragments: str) -> None:
     """Resolves player names, appends the out/in pair to that manager's
@@ -571,6 +633,16 @@ def main():
                           "to compute one manager's score (squad slot, "
                           "points value, captain/chip), then exit -- for "
                           "debugging a score that doesn't look right.")
+    ap.add_argument("--from-screenshot", metavar="IMAGE_PATH",
+                     help="OCR a squad screenshot (pitch or list view) "
+                          "instead of pulling live picks, and print the "
+                          "predicted best-XI/captain from it using current "
+                          "projections. Requires 'pip install pytesseract "
+                          "pillow' plus the Tesseract OCR binary installed "
+                          "separately (not a pip package). List-view "
+                          "screenshots OCR far more reliably than pitch "
+                          "view -- clean text rows vs small text scattered "
+                          "over colored jersey icons.")
     args = ap.parse_args()
 
     print_banner()
@@ -646,6 +718,34 @@ def main():
         print("No Solio projections CSV found (checked solio.csv and "
               "Downloads) -- using ep_next only. Pass --projections <path> "
               "to use a specific file.")
+
+    if args.from_screenshot:
+        element_ids, unmatched = extract_squad_from_screenshot(Path(args.from_screenshot), bootstrap)
+        print(f"\nMatched {len(element_ids)} player(s) from the screenshot.")
+        if unmatched:
+            shown = ", ".join(unmatched[:10]) + (" ..." if len(unmatched) > 10 else "")
+            print(f"  {len(unmatched)} line(s) didn't match any player "
+                  f"(likely noise -- badges, point totals, headers): {shown}")
+        if len(element_ids) < 11:
+            print(f"ERROR: only matched {len(element_ids)} players, need at "
+                  f"least 11 for a valid XI. Try a clearer screenshot -- "
+                  f"list view tends to OCR far more reliably than pitch view.")
+            return
+        if len(element_ids) > 15:
+            print(f"WARNING: matched {len(element_ids)} players, more than "
+                  f"a 15-man squad -- some matches may be false positives.")
+
+        picks_data = {"picks": [{"element": eid} for eid in element_ids]}
+        starters, captain = pick_best_eleven(picks_data, players, points)
+        score = project_best_xi_score(picks_data, players, points)
+        print("\n=== Predicted best XI from screenshot ===")
+        for eid in starters:
+            el = players.get(eid)
+            name = f"{el['first_name']} {el['second_name']}" if el else f"element #{eid}"
+            cap = " (C)" if eid == captain else ""
+            print(f"  {name}{cap}: {points.get(eid, 0.0):.2f}")
+        print(f"\nPredicted score: {score}")
+        return
 
     last_finished_gw, next_gw = current_and_next_gw(bootstrap)
     print(f"Last finished GW: {last_finished_gw}, projecting for GW: {next_gw}")
