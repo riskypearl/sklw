@@ -414,7 +414,8 @@ def save_wildcard_squad(overrides_path: Path, players: dict[int, dict],
     overwriting it). Used by both --wildcard (one manager, hand-typed
     squad) and --wildcard-auto (many managers, one computed squad)."""
     all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
-    all_overrides[str(manager_id)] = {"wildcard": ids}
+    entry = all_overrides.setdefault(str(manager_id), {})
+    entry["wildcard"] = ids
     overrides_path.write_text(json.dumps(all_overrides, indent=2))
 
     names = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in ids)
@@ -435,6 +436,24 @@ def record_wildcard(overrides_path: Path, bootstrap: dict, manager_name: str,
     players = player_lookup(bootstrap)
     save_wildcard_squad(overrides_path, players, manager_name, manager_id, ids)
     print(f"Saved to {overrides_path}\n")
+
+
+def save_manual_score(overrides_path: Path, manager_name: str,
+                       manager_id: int, score: float) -> None:
+    """Directly sets a manager's final SKLW score for this GW to an exact
+    number, skipping the normal picks/points computation entirely for
+    them (the main scoring loop short-circuits on this before even
+    fetching their picks). For --wildcard-auto in particular: several
+    managers on the exact same computed squad are going to end up with
+    near-identical real scores anyway, so rather than trust slightly
+    different best-xi numbers (which can differ GW to GW as each
+    manager's own bench/captain history diverges even off an identical
+    squad), just call it the same number for all of them."""
+    all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
+    entry = all_overrides.setdefault(str(manager_id), {})
+    entry["manual_score"] = score
+    overrides_path.write_text(json.dumps(all_overrides, indent=2))
+    print(f"Set manual score override for {manager_name}: {score}")
 
 
 def parse_xpoints_overrides(bootstrap: dict, spec: str) -> dict[int, float]:
@@ -1015,6 +1034,16 @@ def main():
                           "from injury, a new signing with no track "
                           "record, a hunch). Comma-separated 'name=value' "
                           "pairs, e.g. --xpoints \"Haaland=15,Salah=12\".")
+    ap.add_argument("--set-score", type=float, metavar="POINTS",
+                     help="with --wildcard-auto: also set every listed "
+                          "manager's final SKLW score for this GW to this "
+                          "exact same number, instead of each getting "
+                          "their own separately-computed best-xi score -- "
+                          "for when they're all on an identical (or "
+                          "near-identical) squad and you just want to "
+                          "call it one number for all of them rather than "
+                          "worry about small best-xi differences. e.g. "
+                          "--wildcard-auto \"az,Classiic\" --set-score 65")
     ap.add_argument("--tc", metavar="MANAGER_NAME",
                      help="record a Triple Captain pick for this club "
                           "member -- which specific player they're "
@@ -1158,6 +1187,8 @@ def main():
                 cname = (f"{players[cid]['first_name']} {players[cid]['second_name']}"
                           if cid in players else f"#{cid}")
                 parts.append(f"TRIPLE CAPTAIN: {cname}")
+            if "manual_score" in entry:
+                parts.append(f"MANUAL SCORE: {entry['manual_score']}")
             if parts:
                 print(f"  {manager_name}: " + "; ".join(parts))
         return
@@ -1219,6 +1250,8 @@ def main():
         ov_path = Path(args.overrides)
         for member_name, mid in member_pairs:
             save_wildcard_squad(ov_path, players, member_name, mid, ids)
+            if args.set_score is not None:
+                save_manual_score(ov_path, member_name, mid, args.set_score)
         print(f"\nSaved to {ov_path}")
         print("Run 'run.bat --mode preview' separately to see the updated "
               "lineup.")
@@ -1303,6 +1336,11 @@ def main():
 
     if args.explain:
         member_name, mid = resolve_manager(args.explain)
+        if args.mode == "preview" and str(mid) in overrides and "manual_score" in overrides[str(mid)]:
+            print(f"\n=== {member_name} ===")
+            print(f"Manual score override: {overrides[str(mid)]['manual_score']} "
+                  f"(no picks fetched -- this bypasses the normal computation entirely)")
+            return
         picks_data, gw_used = fetch_picks_with_fallback(mid, args.mode, last_finished_gw, next_gw)
         if picks_data is None:
             print(f"  {member_name}: could not fetch picks at all (bad manager ID?)")
@@ -1334,6 +1372,12 @@ def main():
 
     scores: list[tuple[str, float]] = []
     for name, mid in MANAGER_IDS.items():
+        if args.mode == "preview" and str(mid) in overrides and "manual_score" in overrides[str(mid)]:
+            score = overrides[str(mid)]["manual_score"]
+            print(f"  {name}: manual score override, projected {score}")
+            scores.append((name, score))
+            continue
+
         picks_data, gw_used = fetch_picks_with_fallback(mid, args.mode, last_finished_gw, next_gw)
 
         if picks_data is None:

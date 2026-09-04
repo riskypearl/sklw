@@ -212,6 +212,20 @@ whatever ep_next/Solio would have given that player for this squad-
 building step only, doesn't touch the CSV or affect anyone else's score
 elsewhere.
 
+If everyone in the `--wildcard-auto` batch is on the exact same squad
+anyway, their real best-xi scores will end up near-identical regardless
+of which of them technically has the marginally-better bench/captain —
+so rather than sweat that noise, `--set-score 65` just calls it one flat
+number for every manager in that batch:
+```
+python sklw_lineup.py --wildcard-auto "az,Classiic,Cyclones" --set-score 65
+```
+This saves a `"manual_score"` entry for each of them in `overrides.json`
+— the main scoring loop then uses that number directly for that manager
+(skipping picks/points entirely for them, so it works even without a
+real squad fetched), regardless of mode. Doesn't touch their `"wildcard"`
+squad entry — both are saved together and stack normally.
+
 `--tc "Manager Name" --captain "player"` records a Triple Captain pick —
 which specific player they're captaining this GW. SKLW's own rule nets
 TC down to exactly a normal x2 captain (a third of the tripled score is
