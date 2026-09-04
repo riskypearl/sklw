@@ -437,6 +437,31 @@ def record_wildcard(overrides_path: Path, bootstrap: dict, manager_name: str,
     print(f"Saved to {overrides_path}\n")
 
 
+def parse_xpoints_overrides(bootstrap: dict, spec: str) -> dict[int, float]:
+    """Parses --xpoints's value into {element_id: manual_points}. Format:
+    comma-separated 'name=value' pairs, e.g. 'Haaland=15,Salah=12' -- lets
+    you directly set the expected-points NUMBER used by --wildcard-auto's
+    optimizer for specific players, overriding whatever ep_next/Solio
+    would otherwise have projected, for whenever you don't trust the auto
+    projection for someone (returning from injury, a new signing with no
+    track record, a hunch, etc)."""
+    overrides: dict[int, float] = {}
+    for pair in [p.strip() for p in spec.split(",") if p.strip()]:
+        if "=" not in pair:
+            print(f"ERROR: --xpoints entries must be 'name=value', got '{pair}'")
+            sys.exit(1)
+        name_part, value_part = pair.rsplit("=", 1)
+        try:
+            value = float(value_part.strip())
+        except ValueError:
+            print(f"ERROR: --xpoints value for '{name_part.strip()}' isn't "
+                  f"a number: '{value_part.strip()}'")
+            sys.exit(1)
+        ids = resolve_players(bootstrap, name_part.strip())
+        overrides[ids[0]] = value
+    return overrides
+
+
 def build_optimal_wildcard_squad(bootstrap: dict, points: dict[int, float],
                                   budget: int = 1000) -> list[int]:
     """Builds ONE budget-legal 15-man squad (2 GK/5 DEF/5 MID/3 FWD, max 3
@@ -981,6 +1006,15 @@ def main():
                           "value over multiple weeks, not just once. "
                           "Default 5. Has no effect without a Solio CSV "
                           "loaded (ep_next only ever has next-GW data).")
+    ap.add_argument("--xpoints", metavar="NAME=POINTS,...",
+                     help="manually set the expected-points NUMBER used by "
+                          "--wildcard-auto's optimizer for specific "
+                          "players, overriding whatever ep_next/Solio "
+                          "would have projected -- for when you don't "
+                          "trust the auto projection for someone (back "
+                          "from injury, a new signing with no track "
+                          "record, a hunch). Comma-separated 'name=value' "
+                          "pairs, e.g. --xpoints \"Haaland=15,Salah=12\".")
     ap.add_argument("--tc", metavar="MANAGER_NAME",
                      help="record a Triple Captain pick for this club "
                           "member -- which specific player they're "
@@ -1171,6 +1205,14 @@ def main():
             print(f"Building one optimal Wildcard squad (budget {args.budget}m) "
                   f"using single-GW ep_next only -- no Solio CSV loaded, so "
                   f"multi-GW averaging isn't available...")
+        if args.xpoints:
+            manual = parse_xpoints_overrides(bootstrap, args.xpoints)
+            opt_points.update(manual)
+            manual_str = ", ".join(
+                f"{players[i]['first_name']} {players[i]['second_name']}={v}"
+                for i, v in manual.items())
+            print(f"Manual xPoints override(s) applied: {manual_str}")
+
         ids = build_optimal_wildcard_squad(bootstrap, opt_points, budget=round(args.budget * 10))
         squad_str = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in ids)
         print(f"Optimal squad: {squad_str}\n")

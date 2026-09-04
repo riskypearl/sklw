@@ -204,6 +204,14 @@ single next GW, so without a CSV the optimizer falls back to next-GW-only
 automatically). Override with `--wc-horizon 3` etc. if you want a shorter
 or longer window.
 
+If you don't trust the auto projection for a specific player (back from
+injury, a new signing with no track record, or just a hunch), set their
+expected-points NUMBER by hand for the optimizer with `--xpoints
+"Haaland=15,Salah=12"` (comma-separated `name=value` pairs) — overrides
+whatever ep_next/Solio would have given that player for this squad-
+building step only, doesn't touch the CSV or affect anyone else's score
+elsewhere.
+
 `--tc "Manager Name" --captain "player"` records a Triple Captain pick —
 which specific player they're captaining this GW. SKLW's own rule nets
 TC down to exactly a normal x2 captain (a third of the tripled score is
