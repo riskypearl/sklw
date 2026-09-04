@@ -52,7 +52,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-PROFILE_DIR = Path(__file__).parent / "solio_browser_profile"
+PROFILE_DIR = Path(__file__).parent / "browser_profile"
 OUT_PATH = Path(__file__).parent / "solio.csv"
 SOLIO_URL = "https://fpl.solioanalytics.com/"
 DOWNLOAD_BUTTON_LABEL = "Download points projections"
