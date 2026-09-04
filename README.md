@@ -129,48 +129,37 @@ export each time (if you haven't logged in yet, or don't click anything
 within 5 minutes, it just skips ahead and uses whatever `solio.csv`/
 `ep_next` is already available — it won't crash or hang forever). If you
 want to skip the fetch step entirely and just re-run projections against
-the CSV you already have, call the script directly instead:
-`venv\Scripts\python.exe sklw_lineup.py` (or `draft_lineup.py`).
+the CSV you already have, use `run_nofetch.bat` (or `run_draft_nofetch.bat`)
+instead — same as `run.bat` but without the Solio browser step, useful if
+you're sharing this tool with someone who doesn't have a Solio login
+(they'll just get `ep_next`-based projections, or their own CSV via
+`--projections`, with no Solio dependency at all).
 
-### Reading a squad from a screenshot (`--from-screenshot`)
+### Reading a squad from a screenshot (`--from-screenshot`) — ⚠️ doesn't work well right now
 
-For a manager whose squad you only have as a screenshot (pitch view or
-list view) rather than pulling live via the API: `--from-screenshot
-path/to/image.png` OCRs it, matches whatever text it finds against the
-real FPL player list, and prints the predicted best-XI/captain from that
-squad using current projections (`ep_next` or `--projections`/auto-detected
-Solio CSV). It does NOT try to detect who was actually captained/benched
-from badges or icons in the image — it just extracts the 15-man squad and
-lets the existing best-XI logic (same as `--best-xi`) work out the
-predicted starting 11 + captain from current projections.
+**Status: not currently reliable enough to use.** Tested against real
+pitch-view screenshots and topped out around 10-12/15 players correctly
+matched (the rest need to be typed in manually via the fill-in-the-gaps
+prompt it shows) — good enough that it won't silently get a player
+*wrong* (ambiguous/spurious matches are deliberately rejected rather than
+guessed at), but not good enough to trust for a full automatic 15/15
+read. Left in the codebase in case a real coordinate-measured calibration
+pass improves it later, but the recommended path for now is
+`--transfer`/`--wildcard` (both fully reliable, tested against live data)
+rather than screenshots.
 
-Setup (one-time):
-```
-pip install pytesseract pillow
-```
-Also needs the Tesseract OCR binary itself (not a pip package) —
-on Windows, install it from
-[UB-Mannheim's Tesseract installer](https://github.com/UB-Mannheim/tesseract/wiki)
-and make sure `tesseract.exe` is on your PATH (or point `pytesseract`
-at it directly — see pytesseract's docs if it can't find it automatically).
-
-Usage:
-```
-run.bat --from-screenshot path\to\screenshot.png
-```
-
-Matching is deliberately conservative — it tries an exact/substring match
-against real player names first, then a fuzzy near-match fallback for
-minor OCR misreads, and anything that doesn't match closely enough is
-reported as an unmatched line rather than guessed at, so it's obvious
-when the screenshot needs to be clearer rather than silently getting a
-player wrong. **List view OCRs far more reliably than pitch view** —
-clean rows of text vs small text scattered over colored jersey icons —
-so prefer list view where possible. Tested end-to-end against a
-synthetic test image with correct matching logic and zero false
-positives, but not yet verified against a real FPL screenshot — treat
-the first real run with normal skepticism and report back anything that
-looks wrong.
+If you want to try it anyway: for a manager whose squad you only have as
+a screenshot (pitch view or list view) rather than pulling live via the
+API, `--from-screenshot path/to/image.png` OCRs it, matches whatever text
+it finds against the real FPL player list, and prints the predicted
+best-XI/captain from that squad using current projections. It does NOT
+try to detect who was actually captained/benched from badges or icons in
+the image — it just extracts the (partial) squad and lets the existing
+best-XI logic (same as `--best-xi`) work out the predicted starting 11 +
+captain. Requires `pip install pytesseract pillow` plus the
+[Tesseract OCR binary](https://github.com/UB-Mannheim/tesseract/wiki)
+installed separately (not a pip package). List view OCRs meaningfully
+better than pitch view if you have a choice.
 
 `--best-xi` is a one-off comparison: instead of trusting each manager's
 actual submitted starting-11/captain, it scores them using the
@@ -199,6 +188,22 @@ Multiple players in one transfer: comma-separate them, e.g.
 `--out "Haaland,Saka" --in "Watkins,Salah"` (same order on both sides).
 Run `--transfer` again for each new transfer as members report them in
 — it accumulates in `overrides.json` rather than overwriting.
+
+`--wildcard "Manager Name" --squad "player1,player2,...,player15"` is for
+when a member plays Wildcard (or you're planning their WC squad ahead of
+time) — unlike `--transfer`, this replaces their ENTIRE 15-man squad
+rather than swapping individual players, so it needs the full list, not
+just what changed. Requires exactly 15 names, comma-separated. It resolves
+each name, saves the squad under a `"wildcard"` key in that member's
+`overrides.json` entry (distinct from `"out"/"in"` — running `--transfer`
+afterwards for the same member doesn't clash with it), and automatically
+scores that member off the best valid XI from the new squad (same
+formation-valid logic as `--best-xi`) rather than trusting a submitted
+starting-11, since a fresh Wildcard squad often hasn't had a lineup set
+yet. Like `--transfer`, it just records and stops — run `run.bat --mode
+preview` separately afterwards to see the updated lineup. Running
+`--wildcard` again for the same manager overwrites their previous WC
+squad entry (it's a full replacement, not cumulative like transfers).
 
 `--fh "Manager Name"` marks a club member as playing Free Hit this GW
 and forces them into the suggested lineup's GK slot, regardless of their
