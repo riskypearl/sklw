@@ -155,18 +155,25 @@ def _fold(s: str) -> str:
     return s.strip().lower()
 
 
-def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
+def load_solio_projections(csv_path: Path, bootstrap: dict, horizon: int = 1) -> dict[int, float]:
     """Maps a Solio-style projections CSV (Pos,ID,Name,BV,SV,Team,1_xMins...,
-    N_Pts...) onto FPL element IDs, keyed by whichever '<N>_Pts' column has
-    the LOWEST number (the soonest upcoming GW) -- not hardcoded to
-    '1_Pts', since Solio numbers these relative to the current GW rather
-    than always resetting to 1 (e.g. '2_Pts' once GW1 has passed). Solio's
-    own 'ID' column is its own internal numbering, not the FPL element ID,
-    so matching is by name (FPL's short web_name) first -- team is only
-    used to disambiguate the rare case of two players sharing a web_name,
-    not required to match, since a promoted club's name or a recent
-    real-life transfer can make the two sources' 'Team' values disagree
-    even for an unambiguous, correctly-matched player."""
+    N_Pts...) onto FPL element IDs. Solio's own 'ID' column is its own
+    internal numbering, not the FPL element ID, so matching is by name
+    (FPL's short web_name) first -- team is only used to disambiguate the
+    rare case of two players sharing a web_name, not required to match,
+    since a promoted club's name or a recent real-life transfer can make
+    the two sources' 'Team' values disagree even for an unambiguous,
+    correctly-matched player.
+
+    horizon: by default (1) uses just whichever '<N>_Pts' column has the
+    LOWEST number (the soonest upcoming GW) -- not hardcoded to '1_Pts',
+    since Solio numbers these relative to the current GW rather than
+    always resetting to 1 (e.g. '2_Pts' once GW1 has passed). A horizon
+    above 1 instead AVERAGES across that many of the nearest '<N>_Pts'
+    columns (clamped to however many the CSV actually has) -- used by
+    --wildcard-auto, where the squad needs to hold up well over several
+    gameweeks, not just score well once; the normal per-GW scoring flow
+    always uses the default horizon=1."""
     team_names = {t["id"]: t["name"] for t in bootstrap["teams"]}
     by_name: dict[str, list[dict]] = {}
     for p in bootstrap["elements"]:
@@ -181,11 +188,16 @@ def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
         if not pts_cols:
             print(f"ERROR: no '<N>_Pts' column found in {csv_path}")
             sys.exit(1)
-        next_gw_col = pts_cols[0]
+        use_cols = pts_cols[:max(1, horizon)]
+
+        def avg_pts(row: dict) -> float:
+            vals = [float(row[c]) for c in use_cols if row.get(c, "").strip() != ""]
+            return sum(vals) / len(vals) if vals else 0.0
+
         for row in reader:
             candidates = by_name.get(_fold(row["Name"]), [])
             if len(candidates) == 1:
-                points[candidates[0]["id"]] = float(row[next_gw_col])
+                points[candidates[0]["id"]] = avg_pts(row)
                 continue
             if len(candidates) > 1:
                 csv_team = _fold(row["Team"])
@@ -193,7 +205,7 @@ def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
                             if csv_team in _fold(team_names.get(p["team"], ""))
                             or _fold(team_names.get(p["team"], "")) in csv_team]
                 if len(narrowed) == 1:
-                    points[narrowed[0]["id"]] = float(row[next_gw_col])
+                    points[narrowed[0]["id"]] = avg_pts(row)
                     continue
             unmatched.append(row["Name"])
     if unmatched:
@@ -960,6 +972,15 @@ def main():
                      help="total squad budget in millions for "
                           "--wildcard-auto (default 100.0, FPL's standard "
                           "starting budget)")
+    ap.add_argument("--wc-horizon", type=int, default=5,
+                     help="for --wildcard-auto: average projected points "
+                          "across this many upcoming GWs (from the Solio "
+                          "CSV's '<N>_Pts' columns, clamped to however "
+                          "many it actually has) instead of just the next "
+                          "single GW, since a Wildcard squad needs to hold "
+                          "value over multiple weeks, not just once. "
+                          "Default 5. Has no effect without a Solio CSV "
+                          "loaded (ep_next only ever has next-GW data).")
     ap.add_argument("--tc", metavar="MANAGER_NAME",
                      help="record a Triple Captain pick for this club "
                           "member -- which specific player they're "
@@ -1139,8 +1160,18 @@ def main():
         if not member_pairs:
             print("ERROR: --wildcard-auto needs at least one manager name")
             sys.exit(1)
-        print(f"Building one optimal Wildcard squad (budget {args.budget}m)...")
-        ids = build_optimal_wildcard_squad(bootstrap, points, budget=round(args.budget * 10))
+        opt_points = dict(points)
+        if projections_path and projections_path.exists():
+            horizon_points = load_solio_projections(projections_path, bootstrap, horizon=args.wc_horizon)
+            opt_points.update(horizon_points)
+            print(f"Building one optimal Wildcard squad (budget {args.budget}m, "
+                  f"averaged over the next {args.wc_horizon} GW(s) of Solio "
+                  f"projections where available, ep_next elsewhere)...")
+        else:
+            print(f"Building one optimal Wildcard squad (budget {args.budget}m) "
+                  f"using single-GW ep_next only -- no Solio CSV loaded, so "
+                  f"multi-GW averaging isn't available...")
+        ids = build_optimal_wildcard_squad(bootstrap, opt_points, budget=round(args.budget * 10))
         squad_str = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in ids)
         print(f"Optimal squad: {squad_str}\n")
         ov_path = Path(args.overrides)

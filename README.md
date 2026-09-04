@@ -194,6 +194,16 @@ Add `--budget 99.5` (or whatever bank they've actually got) if it's not
 the standard £100.0m. Then, same as `--wildcard`: run `run.bat --mode
 preview` separately to see it reflected in the suggested lineup.
 
+By default the squad is optimized on points averaged across the next 5
+GWs (`--wc-horizon 5`), not just the single next one — a Wildcard squad
+has to hold up over several gameweeks, so a player who's brilliant for
+one GW (a single soft fixture) but nothing after shouldn't outrank
+someone solid across the whole horizon. This needs a Solio CSV loaded
+(its `<N>_Pts` columns for GW+1, GW+2, ... — ep_next only ever covers the
+single next GW, so without a CSV the optimizer falls back to next-GW-only
+automatically). Override with `--wc-horizon 3` etc. if you want a shorter
+or longer window.
+
 `--tc "Manager Name" --captain "player"` records a Triple Captain pick —
 which specific player they're captaining this GW. SKLW's own rule nets
 TC down to exactly a normal x2 captain (a third of the tripled score is
