@@ -205,6 +205,26 @@ preview` separately afterwards to see the updated lineup. Running
 `--wildcard` again for the same manager overwrites their previous WC
 squad entry (it's a full replacement, not cumulative like transfers).
 
+`--wildcard-auto "Manager1,Manager2,..."` is for when several members are
+playing Wildcard the same week and are likely to land on close to the
+same squad anyway (e.g. a group of analytics-based managers all chasing
+the same projections) — rather than typing out `--wildcard`/`--squad` by
+hand for each one, this computes ONE genuinely optimal, budget-legal
+15-man squad (max 3 players from any one real club, £100.0m budget by
+default — override with `--budget 99.5` etc., total cost must stay under
+that) that maximizes the best valid starting-XI + captain score
+achievable from it, using current projections (`ep_next` or Solio,
+whichever's loaded) — and applies that identical squad to every manager
+name listed in one go. Real solver, not a top-15-by-points shortcut (that
+would blow the budget/formation rules) — it's a MILP solved via
+`pip install pulp` (bundles its own solver, no separate binary needed).
+Same `overrides.json` `"wildcard"` key and best-xi auto-scoring as
+`--wildcard`; running it again (for the same or different managers)
+overwrites each listed manager's previous WC squad entry. If a handful of
+members' Wildcard squads genuinely differ from each other, use
+`--wildcard`/`--squad` per manager instead — `--wildcard-auto` assumes
+they're all fine with the same squad.
+
 `--fh "Manager Name"` marks a club member as playing Free Hit this GW
 and forces them into the suggested lineup's GK slot, regardless of their
 computed score. Reasoning: a GK faces BOTH opposing Strikers individually

@@ -361,6 +361,20 @@ def apply_wildcard(picks_data: dict, wildcard_ids: list[int]) -> dict:
     return {**picks_data, "picks": picks, "active_chip": "wildcard"}
 
 
+def save_wildcard_squad(overrides_path: Path, players: dict[int, dict],
+                         manager_name: str, manager_id: int, ids: list[int]) -> None:
+    """Shared save step for a resolved 15-id Wildcard squad -- writes it
+    into that manager's 'wildcard' entry in overrides.json (creating/
+    overwriting it). Used by both --wildcard (one manager, hand-typed
+    squad) and --wildcard-auto (many managers, one computed squad)."""
+    all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
+    all_overrides[str(manager_id)] = {"wildcard": ids}
+    overrides_path.write_text(json.dumps(all_overrides, indent=2))
+
+    names = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in ids)
+    print(f"Recorded Wildcard squad for {manager_name}: {names}")
+
+
 def record_wildcard(overrides_path: Path, bootstrap: dict, manager_name: str,
                      manager_id: int, squad_fragments: str) -> None:
     """Resolves a full 15-name squad and saves it as that manager's
@@ -372,14 +386,77 @@ def record_wildcard(overrides_path: Path, bootstrap: dict, manager_name: str,
         print(f"ERROR: --squad must list exactly 15 players, got {len(ids)}")
         sys.exit(1)
 
-    all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
-    all_overrides[str(manager_id)] = {"wildcard": ids}
-    overrides_path.write_text(json.dumps(all_overrides, indent=2))
-
     players = player_lookup(bootstrap)
-    names = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in ids)
-    print(f"Recorded Wildcard squad for {manager_name}: {names}")
+    save_wildcard_squad(overrides_path, players, manager_name, manager_id, ids)
     print(f"Saved to {overrides_path}\n")
+
+
+def build_optimal_wildcard_squad(bootstrap: dict, points: dict[int, float],
+                                  budget: int = 1000) -> list[int]:
+    """Builds ONE budget-legal 15-man squad (2 GK/5 DEF/5 MID/3 FWD, max 3
+    players from any one real club, total cost <= budget in FPL's own
+    now_cost units -- tenths of a million, so 1000 = GBP100.0m) that
+    maximizes the best valid starting-XI + captain score achievable from
+    it. Solved as a single MILP (squad selection and starting-XI/captain
+    selection jointly, not as two separate steps) via PuLP + its bundled
+    CBC solver -- no external binary needed, unlike Tesseract.
+
+    Used by --wildcard-auto: several analytics-minded managers picking a
+    Wildcard independently would likely converge on close to the same
+    squad anyway (same projections, same budget/formation rules), so
+    rather than typing out --wildcard/--squad by hand per manager, this
+    computes ONE genuinely optimal squad once and lets it be applied to
+    all of them in a single command."""
+    import pulp
+
+    elements = [p for p in bootstrap["elements"] if p["status"] != "u"]
+    ids = [p["id"] for p in elements]
+    pts = {p["id"]: points.get(p["id"], 0.0) for p in elements}
+    cost = {p["id"]: p["now_cost"] for p in elements}
+    pos = {p["id"]: p["element_type"] for p in elements}  # 1 GK, 2 DEF, 3 MID, 4 FWD
+    team = {p["id"]: p["team"] for p in elements}
+
+    prob = pulp.LpProblem("wildcard_squad", pulp.LpMaximize)
+    x = pulp.LpVariable.dicts("squad", ids, cat="Binary")   # in the 15-man squad
+    y = pulp.LpVariable.dicts("start", ids, cat="Binary")   # in the starting XI
+    c = pulp.LpVariable.dicts("cap", ids, cat="Binary")     # captain
+
+    prob += (pulp.lpSum(pts[i] * y[i] for i in ids)
+             + pulp.lpSum(pts[i] * c[i] for i in ids))  # captain's score doubled
+
+    prob += pulp.lpSum(x[i] for i in ids) == 15
+    prob += pulp.lpSum(x[i] for i in ids if pos[i] == 1) == 2
+    prob += pulp.lpSum(x[i] for i in ids if pos[i] == 2) == 5
+    prob += pulp.lpSum(x[i] for i in ids if pos[i] == 3) == 5
+    prob += pulp.lpSum(x[i] for i in ids if pos[i] == 4) == 3
+    prob += pulp.lpSum(cost[i] * x[i] for i in ids) <= budget
+    for t in {team[i] for i in ids}:
+        prob += pulp.lpSum(x[i] for i in ids if team[i] == t) <= 3
+
+    prob += pulp.lpSum(y[i] for i in ids) == 11
+    prob += pulp.lpSum(y[i] for i in ids if pos[i] == 1) == 1
+    def_start = pulp.lpSum(y[i] for i in ids if pos[i] == 2)
+    mid_start = pulp.lpSum(y[i] for i in ids if pos[i] == 3)
+    fwd_start = pulp.lpSum(y[i] for i in ids if pos[i] == 4)
+    prob += def_start >= 3
+    prob += def_start <= 5
+    prob += mid_start >= 2
+    prob += mid_start <= 5
+    prob += fwd_start >= 1
+    prob += fwd_start <= 3
+
+    for i in ids:
+        prob += y[i] <= x[i]
+        prob += c[i] <= y[i]
+    prob += pulp.lpSum(c[i] for i in ids) == 1
+
+    prob.solve(pulp.PULP_CBC_CMD(msg=0))
+    if pulp.LpStatus[prob.status] != "Optimal":
+        print(f"ERROR: wildcard squad optimizer failed to find a solution "
+              f"(solver status: {pulp.LpStatus[prob.status]})")
+        sys.exit(1)
+
+    return [i for i in ids if x[i].value() > 0.5]
 
 
 def resolve_manager(name: str) -> tuple[str, int]:
@@ -807,6 +884,21 @@ def main():
                           "choice for a wildcarded squad isn't known.")
     ap.add_argument("--squad", help="comma-separated list of exactly 15 "
                                      "player name fragments (with --wildcard)")
+    ap.add_argument("--wildcard-auto", metavar="MANAGER_NAMES",
+                     help="build ONE optimal, budget-legal Wildcard squad "
+                          "(max 3 players per real club, maximizing "
+                          "projected best-XI+captain score via a MILP "
+                          "solver) and apply it to ALL of these comma-"
+                          "separated club members at once -- for when "
+                          "several managers (e.g. all analytics-based) are "
+                          "likely to land on close to the same squad "
+                          "anyway, so there's no point typing out "
+                          "--wildcard/--squad by hand for each one. "
+                          "Requires 'pip install pulp'.")
+    ap.add_argument("--budget", type=float, default=100.0,
+                     help="total squad budget in millions for "
+                          "--wildcard-auto (default 100.0, FPL's standard "
+                          "starting budget)")
     ap.add_argument("--fh", action="append", metavar="MANAGER_NAME",
                      help="mark this club member as playing Free Hit this "
                           "GW -- forces them into the GK slot in the "
@@ -945,6 +1037,24 @@ def main():
         print("No Solio projections CSV found (checked solio.csv and "
               "Downloads) -- using ep_next only. Pass --projections <path> "
               "to use a specific file.")
+
+    if args.wildcard_auto:
+        member_pairs = [resolve_manager(n.strip())
+                         for n in args.wildcard_auto.split(",") if n.strip()]
+        if not member_pairs:
+            print("ERROR: --wildcard-auto needs at least one manager name")
+            sys.exit(1)
+        print(f"Building one optimal Wildcard squad (budget {args.budget}m)...")
+        ids = build_optimal_wildcard_squad(bootstrap, points, budget=round(args.budget * 10))
+        squad_str = ", ".join(f"{players[i]['first_name']} {players[i]['second_name']}" for i in ids)
+        print(f"Optimal squad: {squad_str}\n")
+        ov_path = Path(args.overrides)
+        for member_name, mid in member_pairs:
+            save_wildcard_squad(ov_path, players, member_name, mid, ids)
+        print(f"\nSaved to {ov_path}")
+        print("Run 'run.bat --mode preview' separately to see the updated "
+              "lineup.")
+        return
 
     if args.from_screenshot:
         if args.from_screenshot == "AUTO":
