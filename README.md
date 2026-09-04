@@ -87,53 +87,13 @@ a CSV: checks for `solio.csv` in this folder first, then falls back to
 the most recently downloaded CSV in your Downloads folder that actually
 looks like a Solio export (checked by header content, not filename).
 
-### Fetching the Solio CSV automatically (`fetch_solio.py`)
-
-Solio's login is Google Sign-In, which Google actively blocks from being
-scripted — so this deliberately does NOT automate the login itself.
-Instead it follows the same pattern already used in the sibling
-`fpl-model` project: log in **once**, by hand, in a real visible browser
-window; Playwright saves that session to a local file
-(`solio_auth_state.json`, gitignored — never commit it, it's equivalent
-to being logged into your account); every run after that reuses the
-saved session automatically. The CSV export button itself still needs a
-manual click each run (the exact page/selector isn't known here), but
-Playwright watches for the download and saves it straight into this
-folder as `solio.csv`, which `sklw_lineup.py`/`draft_lineup.py` then
-pick up automatically with no `--projections` flag needed.
-
-Setup (one-time):
-```
-pip install playwright
-playwright install chromium
-fetch_solio.bat --login
-```
-A real browser window opens — log in with Google yourself, navigate to
-wherever you'd normally go for the export, then press Enter in the
-terminal once logged in.
-
-Normal use (whenever you want a fresh CSV):
-```
-fetch_solio.bat
-```
-Opens a browser already logged in via the saved session — click the
-export/download button same as you do manually today, then press Enter
-in the terminal. The download is captured automatically as `solio.csv`.
-
-If the saved session expires (Solio logs you out), just run
-`fetch_solio.bat --login` again.
-
-`run.bat`/`run_draft.bat` now call `fetch_solio.py` automatically before
-running, so a single `run.bat` will pop up the browser for you to click
-export each time (if you haven't logged in yet, or don't click anything
-within 5 minutes, it just skips ahead and uses whatever `solio.csv`/
-`ep_next` is already available — it won't crash or hang forever). If you
-want to skip the fetch step entirely and just re-run projections against
-the CSV you already have, use `run_nofetch.bat` (or `run_draft_nofetch.bat`)
-instead — same as `run.bat` but without the Solio browser step, useful if
-you're sharing this tool with someone who doesn't have a Solio login
-(they'll just get `ep_next`-based projections, or their own CSV via
-`--projections`, with no Solio dependency at all).
+If you don't have a Solio CSV, just drop one you were given as
+`solio.csv` in this folder (or anywhere in your Downloads) and it'll be
+picked up automatically, no `--projections` flag needed. `run_nofetch.bat`
+(or `run_draft_nofetch.bat`) runs the tool without touching Solio at
+all — useful if you're sharing this with someone who doesn't have (or
+doesn't need) a Solio CSV; they'll just get `ep_next`-based projections
+instead, or their own CSV via `--projections`.
 
 ### Reading a squad from a screenshot (`--from-screenshot`) — ⚠️ doesn't work well right now
 
