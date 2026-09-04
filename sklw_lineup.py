@@ -246,12 +246,30 @@ def find_latest_screenshot() -> Path | None:
 
 
 def pick_best_eleven(picks_data: dict, players: dict[int, dict],
-                      points: dict[int, float]) -> tuple[list[int], int | None]:
+                      points: dict[int, float],
+                      forced_captain: int | None = None) -> tuple[list[int], int | None]:
     """Given a manager's full 15-man squad, picks the highest-projected
     VALID starting XI (real FPL formation rules: 1 GK, 3-5 DEF, 2-5 MID,
     1-3 FWD) rather than trusting their actual submitted starting-11 --
     used by --best-xi to estimate each manager's best-possible score from
-    their real squad. Returns (starter_element_ids, captain_element_id)."""
+    their real squad. Returns (starter_element_ids, captain_element_id).
+
+    forced_captain: for a manager's own deliberate Triple Captain pick
+    (--tc), which may not be their single highest-projected player, so it
+    can't just be inferred from the formation optimization above. If the
+    forced pick isn't already in the computed starting XI, it's swapped in
+    for the weakest starter in the SAME position group (same slot count,
+    so the formation stays valid) -- real TC picks are always someone the
+    manager actually intends to start. Ignored (with a warning) if the
+    pick isn't even in this manager's 15-man squad at all."""
+    squad_ids = {p["element"] for p in picks_data["picks"]}
+    if forced_captain is not None and forced_captain not in squad_ids:
+        fc_el = players.get(forced_captain)
+        name = f"{fc_el['first_name']} {fc_el['second_name']}" if fc_el else f"element #{forced_captain}"
+        print(f"WARNING: Triple Captain pick {name} isn't in this manager's "
+              f"squad -- ignoring forced captain, using best-xi's own pick instead.")
+        forced_captain = None
+
     by_pos: dict[int, list[tuple[float, int]]] = {1: [], 2: [], 3: [], 4: []}
     for p in picks_data["picks"]:
         el = players.get(p["element"])
@@ -278,18 +296,34 @@ def pick_best_eleven(picks_data: dict, players: dict[int, dict],
                 best_outfield = combo
 
     starters = ([gk] if gk else []) + best_outfield
-    captain = max(starters)[1] if starters else None
+
+    if forced_captain is not None:
+        starter_ids = [pid for _, pid in starters]
+        if forced_captain not in starter_ids:
+            fc_pos = players[forced_captain]["element_type"]
+            fc_pts = points.get(forced_captain, 0.0)
+            group_idx = [i for i, (_, pid) in enumerate(starters)
+                         if players[pid]["element_type"] == fc_pos]
+            weakest_idx = min(group_idx, key=lambda i: starters[i][0])
+            starters[weakest_idx] = (fc_pts, forced_captain)
+        captain = forced_captain
+    else:
+        captain = max(starters)[1] if starters else None
+
     return [pid for _, pid in starters], captain
 
 
 def project_best_xi_score(picks_data: dict, players: dict[int, dict],
-                           points: dict[int, float]) -> float:
+                           points: dict[int, float],
+                           forced_captain: int | None = None) -> float:
     """Like project_manager_score, but ignores the manager's actual
     submitted starting-11/captain and instead uses the highest-projected
     valid XI from their real 15-man squad (see pick_best_eleven). A one-off
     'what's their best possible score' estimate, not the authoritative
-    actual-picks score -- so chip adjustments aren't applied here."""
-    starter_ids, captain_id = pick_best_eleven(picks_data, players, points)
+    actual-picks score -- so chip adjustments aren't applied here (except
+    forced_captain -- see pick_best_eleven -- which is just a normal x2
+    double, matching SKLW's own net effect for Triple Captain)."""
+    starter_ids, captain_id = pick_best_eleven(picks_data, players, points, forced_captain)
     total = sum(points.get(pid, 0.0) for pid in starter_ids)
     if captain_id is not None:
         total += points.get(captain_id, 0.0)  # captain doubled
@@ -457,6 +491,33 @@ def build_optimal_wildcard_squad(bootstrap: dict, points: dict[int, float],
         sys.exit(1)
 
     return [i for i in ids if x[i].value() > 0.5]
+
+
+def record_tc(overrides_path: Path, bootstrap: dict, manager_name: str,
+              manager_id: int, captain_fragment: str) -> None:
+    """Records a manual Triple Captain pick for this manager -- which
+    specific player they're captaining, since a real TC choice is
+    deliberate (a differential, a favourable fixture, a nailed-on
+    penalty taker) and won't always be whoever best-xi's own logic would
+    have doubled automatically. Saved as a 'tc_captain' key, distinct
+    from (and stackable with) 'out'/'in' and 'wildcard' -- a manager can
+    transfer AND triple-captain, or wildcard AND triple-captain, in the
+    same week."""
+    ids = resolve_players(bootstrap, captain_fragment)
+    if len(ids) != 1:
+        print(f"ERROR: --captain must resolve to exactly 1 player, got {len(ids)}")
+        sys.exit(1)
+    captain_id = ids[0]
+
+    all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
+    entry = all_overrides.setdefault(str(manager_id), {})
+    entry["tc_captain"] = captain_id
+    overrides_path.write_text(json.dumps(all_overrides, indent=2))
+
+    players = player_lookup(bootstrap)
+    name = f"{players[captain_id]['first_name']} {players[captain_id]['second_name']}"
+    print(f"Recorded Triple Captain for {manager_name}: captaining {name}")
+    print(f"Saved to {overrides_path}\n")
 
 
 def resolve_manager(name: str) -> tuple[str, int]:
@@ -899,6 +960,22 @@ def main():
                      help="total squad budget in millions for "
                           "--wildcard-auto (default 100.0, FPL's standard "
                           "starting budget)")
+    ap.add_argument("--tc", metavar="MANAGER_NAME",
+                     help="record a Triple Captain pick for this club "
+                          "member -- which specific player they're "
+                          "captaining (requires --captain). SKLW nets TC "
+                          "to the same as a normal x2 captain (a third of "
+                          "the tripled score is deducted), so this exists "
+                          "purely so the RIGHT player gets doubled in the "
+                          "projection -- a real TC pick is often a "
+                          "deliberate differential, not necessarily the "
+                          "squad's single highest-projected player, which "
+                          "is what best-xi would otherwise auto-captain. "
+                          "Stacks with --transfer/--wildcard for the same "
+                          "manager.")
+    ap.add_argument("--captain", metavar="PLAYER_NAME",
+                     help="player name fragment being triple-captained "
+                          "(with --tc)")
     ap.add_argument("--fh", action="append", metavar="MANAGER_NAME",
                      help="mark this club member as playing Free Hit this "
                           "GW -- forces them into the GK slot in the "
@@ -984,6 +1061,16 @@ def main():
               "lineup once you're done recording Wildcard squads.")
         return
 
+    if args.tc:
+        if not args.captain:
+            print("ERROR: --tc requires --captain \"player name\"")
+            sys.exit(1)
+        member_name, mid = resolve_manager(args.tc)
+        record_tc(Path(args.overrides), bootstrap, member_name, mid, args.captain)
+        print("Run 'run.bat --mode preview' separately to see the updated "
+              "lineup once you're done recording chips/transfers.")
+        return
+
     if args.list_transfers:
         ov_path = Path(args.overrides)
         if not ov_path.exists():
@@ -997,19 +1084,27 @@ def main():
         print("=== Transfers recorded this week ===")
         for mid_str, entry in overrides.items():
             manager_name = id_to_name.get(int(mid_str), f"manager {mid_str}")
+            parts = []
             if "wildcard" in entry:
                 squad_names = ", ".join(
                     f"{players[i]['first_name']} {players[i]['second_name']}"
                     if i in players else f"#{i}" for i in entry["wildcard"])
-                print(f"  {manager_name}: WILDCARD [{squad_names}]")
-                continue
-            out_names = ", ".join(
-                f"{players[i]['first_name']} {players[i]['second_name']}"
-                if i in players else f"#{i}" for i in entry.get("out", []))
-            in_names = ", ".join(
-                f"{players[i]['first_name']} {players[i]['second_name']}"
-                if i in players else f"#{i}" for i in entry.get("in", []))
-            print(f"  {manager_name}: OUT [{out_names}] -> IN [{in_names}]")
+                parts.append(f"WILDCARD [{squad_names}]")
+            elif entry.get("out") or entry.get("in"):
+                out_names = ", ".join(
+                    f"{players[i]['first_name']} {players[i]['second_name']}"
+                    if i in players else f"#{i}" for i in entry.get("out", []))
+                in_names = ", ".join(
+                    f"{players[i]['first_name']} {players[i]['second_name']}"
+                    if i in players else f"#{i}" for i in entry.get("in", []))
+                parts.append(f"OUT [{out_names}] -> IN [{in_names}]")
+            if "tc_captain" in entry:
+                cid = entry["tc_captain"]
+                cname = (f"{players[cid]['first_name']} {players[cid]['second_name']}"
+                          if cid in players else f"#{cid}")
+                parts.append(f"TRIPLE CAPTAIN: {cname}")
+            if parts:
+                print(f"  {manager_name}: " + "; ".join(parts))
         return
 
     if not MANAGER_IDS:
@@ -1139,12 +1234,29 @@ def main():
         if picks_data is None:
             print(f"  {member_name}: could not fetch picks at all (bad manager ID?)")
             return
+        forced_captain = None
         if args.mode == "preview" and str(mid) in overrides:
             entry = overrides[str(mid)]
             picks_data = apply_wildcard(picks_data, entry["wildcard"]) if "wildcard" in entry \
                 else apply_overrides(picks_data, entry)
+            forced_captain = entry.get("tc_captain")
         print(f"\n=== {member_name} ===")
-        explain_manager(picks_data, gw_used, players, points)
+        if forced_captain is not None:
+            starters, captain = pick_best_eleven(picks_data, players, points, forced_captain)
+            score = project_best_xi_score(picks_data, players, points, forced_captain)
+            cap_el = players.get(captain)
+            cap_name = f"{cap_el['first_name']} {cap_el['second_name']}" if cap_el else "?"
+            print(f"Triple Captain override -- captaining {cap_name}")
+            print("Best-XI squad:")
+            for eid in starters:
+                el = players.get(eid)
+                pname = f"{el['first_name']} {el['second_name']}" if el else f"element #{eid}"
+                cap = " (C, TC)" if eid == captain else ""
+                print(f"  {pname}{cap}: {points.get(eid, 0.0):.2f}")
+            print(f"\nComputed score: {score} (SKLW nets Triple Captain to a "
+                  f"normal x2 captain -- no extra adjustment beyond doubling)")
+        else:
+            explain_manager(picks_data, gw_used, players, points)
         return
 
     scores: list[tuple[str, float]] = []
@@ -1166,6 +1278,7 @@ def main():
         # ceiling" comparison.
         use_best_xi = args.best_xi or (gw_used != next_gw)
 
+        forced_captain = None
         if args.mode == "preview" and str(mid) in overrides:
             entry = overrides[str(mid)]
             if "wildcard" in entry:
@@ -1173,9 +1286,12 @@ def main():
                 use_best_xi = True  # real starting-11/captain for a wildcarded squad isn't known
             else:
                 picks_data = apply_overrides(picks_data, entry)
+            if "tc_captain" in entry:
+                forced_captain = entry["tc_captain"]
+                use_best_xi = True  # need best-xi to actually force this specific captain
 
         if use_best_xi:
-            score = project_best_xi_score(picks_data, players, points)
+            score = project_best_xi_score(picks_data, players, points, forced_captain)
         else:
             score = project_manager_score(picks_data, points)
         tag = "best-xi" if use_best_xi else "actual picks"

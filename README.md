@@ -194,6 +194,22 @@ Add `--budget 99.5` (or whatever bank they've actually got) if it's not
 the standard £100.0m. Then, same as `--wildcard`: run `run.bat --mode
 preview` separately to see it reflected in the suggested lineup.
 
+`--tc "Manager Name" --captain "player"` records a Triple Captain pick —
+which specific player they're captaining this GW. SKLW's own rule nets
+TC down to exactly a normal x2 captain (a third of the tripled score is
+deducted), so this doesn't change a manager's projected score by itself —
+it exists purely so the RIGHT player gets doubled: a real TC pick is
+often a deliberate call (a favourable fixture, a nailed-on penalty
+taker), not necessarily whoever the squad's single highest-projected
+player is, which is what would otherwise get auto-captained. Forces that
+player into the starting XI too if they wouldn't otherwise make it
+(swapped in for the weakest starter in the same position). Stacks with
+`--transfer` and `--wildcard` for the same manager (e.g. wildcard AND
+triple-captain someone from the new squad) — saved as a separate
+`"tc_captain"` key in `overrides.json`, doesn't overwrite either. Like
+`--transfer`/`--wildcard`, it just records and stops — run `run.bat
+--mode preview` separately afterwards.
+
 `--fh "Manager Name"` marks a club member as playing Free Hit this GW
 and forces them into the suggested lineup's GK slot, regardless of their
 computed score. Reasoning: a GK faces BOTH opposing Strikers individually
