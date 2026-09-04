@@ -225,6 +225,15 @@ members' Wildcard squads genuinely differ from each other, use
 `--wildcard`/`--squad` per manager instead — `--wildcard-auto` assumes
 they're all fine with the same squad.
 
+Setup (one-time): `pip install pulp`. Then, e.g. for 8 members all on
+Wildcard this week:
+```
+python sklw_lineup.py --wildcard-auto "az,Classiic,Cyclones,farhan,Harv,Heisen,kb2,Mahmoud"
+```
+Add `--budget 99.5` (or whatever bank they've actually got) if it's not
+the standard £100.0m. Then, same as `--wildcard`: run `run.bat --mode
+preview` separately to see it reflected in the suggested lineup.
+
 `--fh "Manager Name"` marks a club member as playing Free Hit this GW
 and forces them into the suggested lineup's GK slot, regardless of their
 computed score. Reasoning: a GK faces BOTH opposing Strikers individually
