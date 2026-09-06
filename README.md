@@ -77,23 +77,25 @@ Two modes:
 
 Output: projects each of the 16 members' GW score (sum of projected points
 over their 11 starters, captain doubled, chip-adjusted per SKLW's rule
-above), then suggests a lineup — **top 2 scorers → Strikers**, next → GK,
+above), then suggests a lineup — **top scorer → GK**, next 2 → Strikers,
 next 11 → Squad, bottom 2 → Bench.
 
-This flips what an earlier version of this tool did (best player → GK).
-That was justified by "the GK faces both opposing Strikers individually,
-double the H2H exposure of a Striker slot" — but the GK does **not**
-independently score goals at all (see the rules section above; confirmed
-by reproducing 4 real SKLW match results exactly only once that mechanic
-was removed from every scoring file in this repo). Only Strikers convert
-a high score into goals for your own club; a GK's high score only denies
-the opponent's Strikers a bigger margin. Re-ran `backtest.py` against
-real historical FPL data with the corrected scoring to check: top-2-to-
-Strikers/3rd-to-GK beats best-to-GK decisively (2.43 vs 2.15 average
-goals per matchweek, winning head-to-head 36% to 13% of the time), and
-ceiling/variance-weighting the top picks on top of that doesn't close
-the gap either — so this is plain top-3 by projected mean, no further
-weighting, same as before just in the corrected order.
+An earlier version of this tool briefly flipped this to top-2→Strikers,
+next→GK, reasoning that since the GK doesn't independently score goals
+(see the rules section above), only Strikers convert a high score into
+goals at all. That reasoning missed the GK's actual value: a strong GK
+score is compared against **both** of the opponent's Strikers (2
+separate H2H battles denied by 1 slot), while a strong Striker score
+only wins its own single battle. `backtest.py` was re-run measuring NET
+goal differential (goals for minus goals conceded — a "goals for only"
+metric, which is what the flip was originally based on, misses the GK's
+defensive contribution entirely by construction) and confirmed
+best-to-GK is correct: +0.206 avg net goal diff vs -0.005 for the
+flipped order, winning head-to-head 34.5% to 20.8% at plain-mean
+ranking. Mild ceiling/variance-weighting of the top-3 pool (mean +
+0.5×stdev of recent scores) nudges that up further to +0.218, but isn't
+wired in here since it needs a recent-scores history this tool doesn't
+track — plain top-3 by projected mean is the validated default.
 
 By default the projected points come from FPL's own `ep_next` field.
 `--projections path/to/solio.csv` swaps that out for a Solio-style
@@ -266,15 +268,14 @@ triple-captain someone from the new squad) — saved as a separate
 --mode preview` separately afterwards.
 
 `--fh "Manager Name"` marks a club member as playing Free Hit this GW
-and forces them into the suggested lineup's Strikers first (not GK) —
-an FH score's inherent unpredictability/upside converts directly into
-goals as a Striker, whereas GK only benefits defensively from being
-high, so the scoring role gets first claim on it. Free Hit scores get
-no chip adjustment (unlike Bench Boost or Triple Captain), so they
-count at full value regardless of which role they land in. Repeat the
-flag for multiple managers on FH the same week — up to 2 take the
-Striker slots, a 3rd takes GK, any beyond that stay in the normal pool
-with a note printed.
+and forces them into the suggested lineup's GK slot first, then the
+Striker slots — GK is the scarcer, more valuable individual-role slot
+(see above), so the highest-priority FH pick claims it first. Free Hit
+scores get no chip adjustment (unlike Bench Boost or Triple Captain), so
+they count at full value regardless of which role they land in. Repeat
+the flag for multiple managers on FH the same week — the first takes
+GK, up to 2 more take the Striker slots, any beyond that stay in the
+normal pool with a note printed.
 
 Every run also prints a banner up front with the club name ("Algorithm
 and Blues" — edit `CLUB_NAME` at the top of the script if this changes)
@@ -479,16 +480,20 @@ meaningfully better but still not perfect — treat "clearly favoured" as
 meaningful, exact numbers at the extremes with a bit more caution than
 the middle of the range.
 
-**Re-ran the full calibration after fixing the GK-scoring bug and
-reverting the Squad formula** (see the rules section above — every
-number before this point predates that fix): **Brier 0.198**, right in
-line with the pre-fix 0.194 best result, so the team-correlation finding
-and overall calibration quality both hold up under the corrected rules.
-Same overconfident-at-the-extremes pattern as before (e.g. a "90-100%"
-bucket realized 92%, a "0-10%" bucket realized 9% — both close, but the
-60-80% range undershot a bit more this time). Nothing here suggests the
-earlier findings were artifacts of the bug — the calibration
-*methodology* was always independent of it.
+**Re-ran the full calibration after fixing the GK-scoring bug, reverting
+the Squad formula, and correcting the role-assignment priority back to
+best-player→GK** (see the rules section above — every number before this
+point predates those fixes): **Brier 0.191**, slightly better than the
+pre-fix 0.194 best result, so the team-correlation finding and overall
+calibration quality both hold up — if anything a bit better — under the
+fully corrected rules. Similar overconfident-at-the-extremes pattern as
+before (a "0-10%" bucket realized 13%, a "40-50%" bucket realized only
+35%, "70-80%" realized 62% — some buckets close, a few off by 10+
+points), same overall shape as every previous run of this calibration.
+Nothing here suggests the earlier findings were artifacts of any of the
+three bugs — the calibration *methodology* was always independent of
+them; only the exact number moves a little each time a rules bug gets
+fixed.
 
 ## Known gaps / next steps
 
@@ -508,17 +513,26 @@ earlier findings were artifacts of the bug — the calibration
 - `overrides.json` format is a first draft (out/in element ID lists) —
   untested for usability; may want a name-based format instead once used
   for real (the `--lookup` helper exists as a stopgap for this).
-- **`backtest.py` has been re-run under the corrected `match_goals`**
-  (GK-scoring mechanic removed, Squad formula reverted to the doc's `+1`
-  base). Result: the old "put the single best player in GK" strategy is
-  now decisively disproven — **top 2 by projection → Strikers, 3rd →
-  GK** averages 2.434 goals/matchweek and wins head-to-head 36.2% of the
-  time, vs. 2.151 goals and a 12.8% win rate for best-player-to-GK. This
-  is now the live default in both `sklw_lineup.py` (`suggest_lineup`) and
-  `sklw_matchup.py`/`calibrate_matchup.py` (`assign_roles`).
-- `calibrate_matchup.py` has also been re-run with the corrected rules
-  and role priority — see the accuracy section above (Brier 0.198,
-  consistent with the earlier team-correlation finding).
+- **`backtest.py` has been re-run twice on the role-assignment question,
+  and the metric itself needed a fix along the way.** After the
+  GK-scoring bug was removed from `match_goals`, an initial re-run
+  compared methods using "goals for" alone and concluded top-2→Strikers/
+  3rd→GK was decisively better — but that metric only measures a club's
+  own attacking output, and can never see a strategy's defensive effect
+  (the opponent's Strikers scoring against *your* GK), so it structurally
+  can't detect the GK's actual value. Fixing the comparison to use NET
+  goal differential (goals for minus goals conceded, where "conceded"
+  depends on the opponent's Strikers vs. your own GK choice) reversed
+  that finding back: **best player → GK, next 2 → Strikers** wins,
+  averaging +0.206 net goal diff per matchweek vs. -0.005 for the
+  flipped order, and winning head-to-head 34.5% to 20.8% of the time at
+  plain-mean ranking. This is the live default in `sklw_lineup.py`
+  (`suggest_lineup`) and `sklw_matchup.py`/`calibrate_matchup.py`
+  (`assign_roles`).
+- `calibrate_matchup.py` has also been re-run with the fully corrected
+  rules and role priority — see the accuracy section above (Brier 0.191,
+  slightly better than the earlier team-correlation finding's 0.194,
+  consistent with it).
 - `sklw_lineup.py` still lacks the full auto-sub *prediction* that
   `sklw_matchup.py` has (`predict_effective_lineup`, driven by live
   minutes and `finished_provisional`). It only uses the real

@@ -614,14 +614,16 @@ def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: 
 def assign_roles(club: dict[str, dict], forced_gk: str | None = None,
                   forced_strikers: set[str] | None = None,
                   forced_bench: set[str] | None = None) -> dict[str, list[str]]:
-    """Same rule as sklw_lineup.py's suggest_lineup: top 2 projected ->
-    Strikers, next -> GK, next 11 -> Squad, rest -> Bench (Strikers get
-    priority over GK since only Strikers independently score goals --
-    the GK is purely defensive; see the README's rules section and
-    backtest.py's corrected validation). Fixed ONCE from projections
-    (decision-time), same as a real captain would submit -- the Monte
-    Carlo layer below only varies the OUTCOME given this fixed
-    assignment, not the assignment itself.
+    """Same rule as sklw_lineup.py's suggest_lineup: top projected -> GK,
+    next 2 -> Strikers, next 11 -> Squad, rest -> Bench. GK gets priority
+    over Strikers: a strong GK score is compared against BOTH of the
+    opponent's Strikers (denying goals in 2 H2H battles at once), while
+    a strong Striker score only wins its own single battle -- see
+    backtest.py's net-goal-differential re-validation and the README's
+    rules section. Fixed ONCE from projections (decision-time), same as
+    a real captain would submit -- the Monte Carlo layer below only
+    varies the OUTCOME given this fixed assignment, not the assignment
+    itself.
 
     forced_gk/forced_strikers/forced_bench: manager names KNOWN to
     actually hold that real role this week (e.g. scouted from a club's
@@ -661,13 +663,13 @@ def assign_roles(club: dict[str, dict], forced_gk: str | None = None,
     forced_all = ({forced_gk} if forced_gk else set()) | forced_strikers | forced_bench
     ranked = sorted((n for n in club if n not in forced_all), key=lambda n: -club[n]["projected"])
 
+    gk = [forced_gk] if forced_gk else [ranked.pop(0)]
+
     strikers = list(forced_strikers)
     need = 2 - len(strikers)
     if need > 0:
         strikers += ranked[:need]
         del ranked[:need]
-
-    gk = [forced_gk] if forced_gk else [ranked.pop(0)]
 
     bench = list(forced_bench)
     need = 2 - len(bench)

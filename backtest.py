@@ -290,7 +290,7 @@ def main():
     rng = random.Random(args.seed)
     target_gws = list(range(args.min_gw, 39))
 
-    trials = []  # (club1, club2, roles2_a, goals1_a) -- fixed once, independent of k
+    trials = []  # (club1, club2, roles2_a, diff1_a) -- fixed once, independent of k
     for _ in range(args.trials):
         target_gw = rng.choice(target_gws)
         eligible = eligible_for_target(history, target_gw, min_prior=5)
@@ -302,35 +302,45 @@ def main():
         club2 = build_club(rng, pool_ids, eligible, target_gw)
         roles2_a = assign_method_a(club2)
         roles1_a = assign_method_a(club1)
-        goals1_a = match_goals(club1, roles1_a, club2, roles2_a)
-        trials.append((club1, club2, roles2_a, goals1_a))
+        # NET goal differential, not one-sided attacking output: club1's own
+        # GK choice also determines how many goals club2's (fixed) Strikers
+        # score AGAINST club1, so that has to be in the comparison too, or a
+        # strong-GK strategy's entire defensive benefit is invisible to this
+        # backtest by construction.
+        for_a = match_goals(club1, roles1_a, club2, roles2_a)
+        against_a = match_goals(club2, roles2_a, club1, roles1_a)
+        diff_a = for_a - against_a
+        trials.append((club1, club2, roles2_a, diff_a))
 
     n = len(trials)
-    print(f"\n{n} valid trials. Method A (k=0, plain mean) baseline avg goals = "
-          f"{statistics.mean(g for *_, g in trials):.3f}\n")
-    print(f"{'k':>5}  {'avg goals':>10}  {'B > A':>8}  {'A > B':>8}  {'tied':>8}")
+    print(f"\n{n} valid trials. Method A (k=0, plain mean) baseline avg NET goal diff = "
+          f"{statistics.mean(d for *_, d in trials):.3f}\n")
+    print(f"{'k':>5}  {'avg net diff':>12}  {'B > A':>8}  {'A > B':>8}  {'tied':>8}")
 
-    best_k, best_avg = None, -1.0
+    best_k, best_avg = None, float("-inf")
     for k_str in args.k_values.split(","):
         k = float(k_str)
-        goals_b = []
+        diffs_b = []
         wins_a = draws = wins_b = 0
-        for club1, club2, roles2_a, goals1_a in trials:
+        for club1, club2, roles2_a, diff_a in trials:
             roles1_b = assign_method_b(club1, k)
-            goals1_b = match_goals(club1, roles1_b, club2, roles2_a)
-            goals_b.append(goals1_b)
-            if goals1_b > goals1_a:
+            for_b = match_goals(club1, roles1_b, club2, roles2_a)
+            against_b = match_goals(club2, roles2_a, club1, roles1_b)
+            diff_b = for_b - against_b
+            diffs_b.append(diff_b)
+            if diff_b > diff_a:
                 wins_b += 1
-            elif goals1_b < goals1_a:
+            elif diff_b < diff_a:
                 wins_a += 1
             else:
                 draws += 1
-        avg = statistics.mean(goals_b)
-        print(f"{k:>5.1f}  {avg:>10.3f}  {100*wins_b/n:>7.1f}%  {100*wins_a/n:>7.1f}%  {100*draws/n:>7.1f}%")
+        avg = statistics.mean(diffs_b)
+        print(f"{k:>5.1f}  {avg:>12.3f}  {100*wins_b/n:>7.1f}%  {100*wins_a/n:>7.1f}%  {100*draws/n:>7.1f}%")
         if avg > best_avg:
             best_avg, best_k = avg, k
 
-    print(f"\nBest k in this sweep: {best_k} (avg goals {best_avg:.3f} vs {statistics.mean(g for *_, g in trials):.3f} for plain mean)")
+    print(f"\nBest k in this sweep: {best_k} (avg net diff {best_avg:.3f} vs "
+          f"{statistics.mean(d for *_, d in trials):.3f} for plain mean)")
     print(f"Suggested rule: individual-role score = mean_projection + {best_k} * "
           f"stdev(player's own recent real scores)")
 
@@ -359,13 +369,18 @@ def main():
             for name, builder in builders.items():
                 club1 = [builder(rng, pool_ids, eligible, target_gw) for _ in range(16)]
                 roles1_a = assign_method_a(club1)
-                cov_results[name].append(match_goals(club1, roles1_a, club2, roles2_a))
+                # net diff, same reasoning as the k-sweep above -- one-sided
+                # "goals for" alone hides any construction's effect on the
+                # defensive side (club2's Strikers vs club1's own GK).
+                gfor = match_goals(club1, roles1_a, club2, roles2_a)
+                gagainst = match_goals(club2, roles2_a, club1, roles1_a)
+                cov_results[name].append(gfor - gagainst)
             cov_trials += 1
 
         print(f"\n{cov_trials} valid trials (each construction faces the SAME "
               f"opponent draw per trial):")
-        for name, goals in cov_results.items():
-            print(f"  {name:<34} avg goals = {statistics.mean(goals):.3f}")
+        for name, diffs in cov_results.items():
+            print(f"  {name:<34} avg net goal diff = {statistics.mean(diffs):.3f}")
 
 
 if __name__ == "__main__":

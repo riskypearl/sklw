@@ -905,30 +905,34 @@ def explain_manager(picks_data: dict, gw_used: int, players: dict[int, dict],
 
 def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = None) -> None:
     """scores: [(manager_name, projected_score), ...]. Prints a suggested
-    SKLW role assignment -- top 2 scorers to Strikers, next to GK, rest
+    SKLW role assignment -- top scorer to GK, next 2 to Strikers, rest
     fill the 11-a-side squad, bottom 2 benched.
 
-    Strikers get the top 2, not GK -- the GK does NOT independently score
-    goals of its own (confirmed by reproducing 4 real SKLW match results
-    exactly only once that mechanic was removed from this project's
-    scoring code -- see the README). Only Strikers convert a high score
-    into goals FOR your own club; the GK's high score only denies the
-    OPPONENT's Strikers a bigger margin, which doesn't need your single
-    best output specifically. Backtested in backtest.py against real
-    historical FPL data with the corrected scoring: top-2-to-Strikers/
-    3rd-to-GK beats best-to-GK decisively (2.43 vs 2.15 average goals,
-    36% vs 13% head-to-head), and ceiling/variance-weighting the top
-    picks doesn't close that gap either -- so this is plain top-3 by
-    projected mean, no further weighting.
+    GK gets the top score, not Strikers -- a strong GK score is compared
+    against BOTH of the opponent's Strikers (denying goals in 2 separate
+    H2H battles at once), while a strong Striker score only wins its own
+    single battle against the opposing GK. The GK does NOT independently
+    score goals of its own (confirmed by reproducing 4 real SKLW match
+    results exactly -- see the README's rules section); its value is
+    purely this double defensive exposure. Backtested in backtest.py
+    against real historical FPL data using NET goal differential (goals
+    for minus goals conceded -- a one-sided "goals for only" metric
+    misses the GK's whole defensive contribution by construction):
+    best-to-GK beats top-2-to-Strikers/3rd-to-GK decisively (avg net
+    diff +0.206 vs -0.005, 34.5% vs 20.8% head-to-head at plain-mean
+    ranking), and mild ceiling/variance-weighting of the top-3 pool
+    (mean + 0.5*stdev) does slightly better still (+0.218) -- not wired
+    in here since it needs a recent-scores history this tool doesn't
+    track, but plain top-3 by projected mean is already the validated
+    default.
 
     fh_names: managers on Free Hit this GW are prioritized into the
-    scoring roles, in order: both Striker slots first, then GK for a 3rd
-    FH manager. FH gets no chip score adjustment so it counts at full
-    value, and an FH score's inherent unpredictability is worth more as
-    a Striker (upside converts directly into goals) than as GK (upside
-    is wasted beyond just being high enough to block). Beyond both
-    Striker slots + GK there's no more individual-role room, so any
-    further FH managers fall back into the normal pool with no special
+    scoring roles, in order: GK first, then both Striker slots. FH gets
+    no chip score adjustment so it counts at full value, and GK is the
+    scarcer/more valuable individual-role slot (see above), so the
+    highest-scoring FH manager goes there first. Beyond GK + both
+    Striker slots there's no more individual-role room, so any further
+    FH managers fall back into the normal pool with no special
     treatment."""
     fh_names = fh_names or set()
     ranked = sorted(scores, key=lambda x: -x[1])
@@ -937,35 +941,33 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
               f"suggestion below is incomplete.")
 
     fh_present = sorted((ns for ns in ranked if ns[0] in fh_names), key=lambda x: -x[1])
-    fh_strikers = fh_present[0:2]
-    fh_gk = fh_present[2] if len(fh_present) > 2 else None
+    fh_gk = fh_present[0:1]
+    fh_strikers = fh_present[1:3]
     fh_extra = fh_present[3:]
     fh_striker_names = {n for n, _ in fh_strikers}
 
-    if fh_strikers:
+    if fh_gk:
         if fh_extra:
-            print(f"NOTE: also on Free Hit but both Striker slots + GK "
+            print(f"NOTE: also on Free Hit but GK + both Striker slots "
                   f"already taken by higher-priority FH picks, left in the "
                   f"normal pool: {', '.join(n for n, _ in fh_extra)}")
+        print(f"NOTE: {fh_gk[0][0]} is on Free Hit this GW -- forced into "
+              f"GK (highest-priority individual-role slot).")
         for n, _ in fh_strikers:
             print(f"NOTE: {n} is on Free Hit this GW -- forced into "
-                  f"Strikers (a high/unpredictable score converts directly "
-                  f"into goals there, unlike GK).")
-        if fh_gk:
-            print(f"NOTE: {fh_gk[0]} is on Free Hit this GW -- forced into "
-                  f"GK (both Striker slots already taken by higher-priority "
-                  f"FH picks).")
-        assigned = fh_striker_names | ({fh_gk[0]} if fh_gk else set())
+                  f"Strikers (GK slot already taken by a higher-priority "
+                  f"FH pick).")
+        assigned = {fh_gk[0][0]} | fh_striker_names
         pool = [ns for ns in ranked if ns[0] not in assigned]
-        remaining_gk_slots = 0 if fh_gk else 1
-        gk = [fh_gk] if fh_gk else pool[0:1]
-        idx = remaining_gk_slots
-        strikers = fh_strikers
+        remaining_striker_slots = 2 - len(fh_strikers)
+        gk = fh_gk
+        strikers = fh_strikers + pool[0:remaining_striker_slots]
+        idx = remaining_striker_slots
         squad = pool[idx:idx + 11]
         bench = pool[idx + 11:idx + 13]
     else:
-        strikers = ranked[0:2]
-        gk = ranked[2:3]
+        gk = ranked[0:1]
+        strikers = ranked[1:3]
         squad = ranked[3:14]
         bench = ranked[14:16]
 
@@ -978,7 +980,7 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
             print(f"  {name}: {sc}")
     print("\nGoalkeeper:")
     for name, sc in gk:
-        if fh_gk and name == fh_gk[0]:
+        if fh_gk and name == fh_gk[0][0]:
             print(f"  {name}: FH")
         else:
             print(f"  {name}: {sc}")
