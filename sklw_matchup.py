@@ -683,32 +683,45 @@ def h2h_goals(a_actual: float, b_actual: float) -> int:
 
 
 def squad_goals(a_total: float, b_total: float) -> int:
-    """SKLW's own rule: 1 goal per full 30-point margin -- UNLIKE the H2H
-    rule (h2h_goals), there's no separate 'base' goal just for beating
-    the opponent at all; you need a FULL 30-point margin to score even
-    the first goal (a 1-29 point win is still 0). Confirmed against a
-    real SKLW result: a real 52-point squad margin produced exactly 1
-    goal, not 2 -- so this is margin // 30, no '+ 1'."""
+    """SKLW's own rule: a goal for beating the opponent at all, +1 more
+    per full 30-point margin beyond that (same base+bonus shape as
+    h2h_goals, just a wider band) -- margin // 30 + 1 if margin >= 1
+    else 0. This IS the rules doc's literal wording; an earlier version
+    of this code dropped the '+1' after one real result seemed to
+    require it, but that was compensating for a DIFFERENT bug (see
+    match_goals_breakdown) -- confirmed against 4 independent real SKLW
+    results that this formula is correct once that other bug is fixed."""
     margin = a_total - b_total
-    return int(margin // 30) if margin >= 1 else 0
+    return int(margin // 30) + 1 if margin >= 1 else 0
 
 
 def match_goals_breakdown(scores: dict[str, float], roles: dict[str, list[str]],
                            opp_scores: dict[str, float],
                            opp_roles: dict[str, list[str]]) -> dict[str, int]:
     """Goals FOR the 'scores' side, split by which battle they came from
-    -- our Strikers vs their GK, our GK vs their Strikers, our Squad vs
-    their Squad. Lets the final report show WHERE a match is likely to
-    be won or lost, not just the final tally. match_goals() is just the
-    sum of these three."""
+    -- our Strikers vs their GK, our Squad vs their Squad. Lets the final
+    report show WHERE a match is likely to be won or lost, not just the
+    final tally. match_goals() is just the sum of these two.
+
+    The GK does NOT independently score goals of its own -- only
+    Strikers score, against the opposing GK. A GK's role is purely to be
+    a high-scoring target that's hard for the opponent's Strikers to
+    beat; that's already fully captured by the Strikers' own H2H
+    calculation on the OTHER side (their Strikers vs OUR GK counts as
+    goals FOR THEM, not as a separate deduction or GK-goal on our side).
+    An earlier version of this code gave the GK a mirrored scoring
+    mechanic against the opposing Strikers too, which is confirmed WRONG
+    against 4 independent real SKLW results -- removing it (and only it)
+    was what made all 4 reproduce exactly; keeping it double-counts the
+    same individual battle as goals for BOTH sides at once, which can
+    silently make the computed total exceed what either side could
+    actually have scored."""
     striker_goals = sum(h2h_goals(scores[name], opp_scores[opp_roles["gk"][0]])
                          for name in roles["strikers"])
-    gk_goals = sum(h2h_goals(scores[roles["gk"][0]], opp_scores[name])
-                   for name in opp_roles["strikers"])
     own_squad = sum(scores[n] for n in roles["squad"])
     opp_squad = sum(opp_scores[n] for n in opp_roles["squad"])
     squad_g = squad_goals(own_squad, opp_squad)
-    return {"strikers": striker_goals, "gk": gk_goals, "squad": squad_g}
+    return {"strikers": striker_goals, "squad": squad_g}
 
 
 def match_goals(scores: dict[str, float], roles: dict[str, list[str]],
@@ -778,8 +791,8 @@ def run_simulation(rng: random.Random, us_club: dict[str, dict], us_roles: dict[
 
     wins = draws = losses = 0
     our_goals_total = their_goals_total = 0
-    our_breakdown_total = {"strikers": 0, "gk": 0, "squad": 0}
-    their_breakdown_total = {"strikers": 0, "gk": 0, "squad": 0}
+    our_breakdown_total = {"strikers": 0, "squad": 0}
+    their_breakdown_total = {"strikers": 0, "squad": 0}
     for _ in range(sims):
         team_shocks = pick_team_shocks(rng, teams_needed, team_gw_index)
         our_scores = {n: simulate_manager_score(rng, info, players, points, team_names,
@@ -1036,8 +1049,7 @@ def main():
         print(f"\n=== Real score so far (already-known results only, 0 for anyone "
               f"who hasn't played yet) ===")
         print(f"Current scoreline: {current_us_goals} - {current_them_goals}")
-        print(f"  Strikers vs their GK:  {breakdown_us['strikers']} - {breakdown_them['gk']}")
-        print(f"  Our GK vs their Strikers: {breakdown_us['gk']} - {breakdown_them['strikers']}")
+        print(f"  Strikers vs their GK:  {breakdown_us['strikers']} - {breakdown_them['strikers']}")
         print(f"  Squad vs Squad:        {breakdown_us['squad']} - {breakdown_them['squad']}")
         print(f"Still to play: {us_left} of our starters, {them_left} of theirs "
               f"({'; '.join(f'{n}: {p} pending' for n, p in us_pending.items() if p) or 'none'} "
@@ -1058,8 +1070,7 @@ def main():
     for_ = result["avg_breakdown_for"]
     against = result["avg_breakdown_against"]
     print(f"\nWhere the goals come from (average per matchweek):")
-    print(f"  Strikers vs their GK:  {for_['strikers']:.2f} - {against['gk']:.2f}")
-    print(f"  Our GK vs their Strikers: {for_['gk']:.2f} - {against['strikers']:.2f}")
+    print(f"  Strikers vs their GK:  {for_['strikers']:.2f} - {against['strikers']:.2f}")
     print(f"  Squad vs Squad:        {for_['squad']:.2f} - {against['squad']:.2f}")
 
 

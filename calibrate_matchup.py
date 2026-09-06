@@ -149,23 +149,31 @@ def h2h_goals(a: float, b: float) -> int:
 
 
 def squad_goals(a: float, b: float) -> int:
-    """UNLIKE h2h_goals, no base goal just for beating the opponent --
-    needs a full 30-point margin to score even the first goal. Confirmed
-    against a real SKLW result: a real 52-point margin produced exactly
-    1 goal, not 2."""
+    """A goal for beating the opponent at all, +1 more per full 30-point
+    margin beyond that -- same base+bonus shape as h2h_goals, just a
+    wider band. This is the rules doc's literal wording; confirmed
+    against 4 independent real SKLW results once the GK-scoring bug in
+    match_goals (below) was fixed -- that bug, not this formula, was
+    what made an earlier version look like it needed no base goal."""
     margin = a - b
-    return int(margin // 30) if margin >= 1 else 0
+    return int(margin // 30) + 1 if margin >= 1 else 0
 
 
 def match_goals(scores: list[float], roles: dict[str, list[int]],
                  opp_scores: list[float], opp_roles: dict[str, list[int]]) -> int:
-    """Goals FOR 'scores' -- identical formula to backtest.py/sklw_matchup.py,
-    indices instead of names (members here have no natural name)."""
+    """Goals FOR 'scores', indices instead of names (members here have no
+    natural name). The GK does NOT independently score goals of its own
+    -- only Strikers score, against the opposing GK. A GK's role is
+    purely to be a high-scoring target that's hard for the opponent's
+    Strikers to beat; that's already fully captured by the Strikers' own
+    H2H calculation on the OTHER side. Confirmed against 4 independent
+    real SKLW results that giving the GK a mirrored scoring mechanic
+    against the opposing Strikers (an earlier version of this function)
+    is wrong -- removing it (and only it) was what made all 4 reproduce
+    exactly."""
     goals = 0
     for i in roles["strikers"]:
         goals += h2h_goals(scores[i], opp_scores[opp_roles["gk"][0]])
-    for i in opp_roles["strikers"]:
-        goals += h2h_goals(scores[roles["gk"][0]], opp_scores[i])
     own_squad = sum(scores[i] for i in roles["squad"])
     opp_squad = sum(opp_scores[i] for i in opp_roles["squad"])
     goals += squad_goals(own_squad, opp_squad)

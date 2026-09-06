@@ -236,21 +236,30 @@ def h2h_goals(a_actual: float, b_actual: float) -> int:
 
 
 def squad_goals(a_total: float, b_total: float) -> int:
-    """SKLW's own rule: 1 goal per full 30-point margin -- UNLIKE
-    h2h_goals, no separate base goal just for beating the opponent at
-    all; you need a FULL 30-point margin to score even the first goal.
-    Confirmed against a real SKLW result: a real 52-point squad margin
-    produced exactly 1 goal, not 2."""
+    """SKLW's own rule: a goal for beating the opponent at all, +1 more
+    per full 30-point margin beyond that (same base+bonus shape as
+    h2h_goals, just a wider band). This is the rules doc's literal
+    wording; confirmed against 4 independent real SKLW results once the
+    GK-scoring bug in match_goals (below) was fixed -- that bug, not
+    this formula, was what made an earlier version look like it needed
+    no base goal."""
     margin = a_total - b_total
-    return int(margin // 30) if margin >= 1 else 0
+    return int(margin // 30) + 1 if margin >= 1 else 0
 
 
 def match_goals(club: list[dict], roles: dict, opp: list[dict], opp_roles: dict) -> int:
+    """Goals FOR 'club'. The GK does NOT independently score goals of its
+    own -- only Strikers score, against the opposing GK. A GK's role is
+    purely to be a high-scoring target that's hard for the opponent's
+    Strikers to beat; that's already fully captured by the Strikers' own
+    H2H calculation on the OTHER side. Confirmed against 4 independent
+    real SKLW results that giving the GK a mirrored scoring mechanic
+    against the opposing Strikers (an earlier version of this function)
+    is wrong -- removing it (and only it) was what made all 4 reproduce
+    exactly. Call twice with sides swapped to get both scorelines."""
     goals = 0
     for si in roles["strikers"]:
         goals += h2h_goals(club[si]["actual"], opp[opp_roles["gk"][0]]["actual"])
-    for oi in opp_roles["strikers"]:
-        goals += h2h_goals(club[roles["gk"][0]]["actual"], opp[oi]["actual"])
     own_squad = sum(club[i]["actual"] for i in roles["squad"])
     opp_squad = sum(opp[i]["actual"] for i in opp_roles["squad"])
     goals += squad_goals(own_squad, opp_squad)

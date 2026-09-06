@@ -14,18 +14,27 @@ must submit a lineup drawn from those 16 members' real GW scores:
 
 - **2 Strikers** — go into a H2H battle vs the opponent club's nominated
   Goalkeeper. A striker scores a goal if their FPL score beats the
-  opposing GK's score; +1 more goal per full 20 points they outscore by.
-- **1 Goalkeeper** — H2H battle vs the opponent's 2 Strikers (same
-  scoring, mirrored). Both Strikers and GK reward being HIGH-scoring —
-  there's no benefit to hiding a weak member here.
-- **11 Squad** — summed FPL score vs the opponent's 11. 1 goal per FULL
-  30-point margin the combined total beats the opponent by — UNLIKE
-  Strikers/GK, there's no separate base goal just for beating them at
-  all (a 1-29 point win is still 0 goals; you need the full 30 to score
-  even the first one). Confirmed against a real SKLW result (a real
-  52-point squad margin produced exactly 1 goal, not 2) after an earlier
-  version of this repo's code had it wrong (copied the Strikers/GK
-  "base + bonus" shape onto Squad by mistake).
+  opposing GK's score; +1 more goal per full 20 points they outscore by
+  (1-19 → 1 goal, 20-39 → 2 goals, and so on; a tie or the GK
+  outscoring them means the striker blanks — 0 goals).
+- **1 Goalkeeper** — nominated purely as the Strikers' opposing target
+  above. **The GK does NOT independently score goals of its own** — it
+  has no separate H2H battle "against" the opponent's Strikers the way
+  the Strikers do against the GK. A GK's only function is being a
+  high-scoring target that's hard for the opponent's Strikers to beat;
+  that value is already fully captured by how it affects the Strikers'
+  H2H result above, not as an extra source of goals. (An earlier version
+  of every scoring file in this repo — `sklw_lineup.py`'s reasoning
+  comments, `sklw_matchup.py`, `calibrate_matchup.py`, `backtest.py` —
+  assumed a mirrored GK-scores-too mechanic; this was proven wrong by
+  reproducing 4 independent real SKLW match results exactly only once
+  it was removed — see the git history around when this was found for
+  the full reasoning and worked examples.)
+- **11 Squad** — summed FPL score vs the opponent's 11. A goal for
+  beating the opponent's total at all, +1 more per full 30-point margin
+  beyond that (1-29 → 1 goal, 30-59 → 2 goals, and so on — same
+  base+bonus shape as Strikers/GK, just a wider band). A tie means
+  neither side scores.
 - **2 Bench** — don't count.
 
 Full rules: see `docs/rules.md` (paste of the original rules doc) if
@@ -69,14 +78,23 @@ Two modes:
 Output: projects each of the 16 members' GW score (sum of projected points
 over their 11 starters, captain doubled, chip-adjusted per SKLW's rule
 above), then suggests a lineup — **top scorer → GK**, next 2 → Strikers,
-next 11 → Squad, bottom 2 → Bench. (Both Strikers and GK want HIGH
-projected scorers, since both roles are rewarded for outscoring the
-opponent, not for hiding a weak link — GK gets the single best because it
-faces BOTH opposing Strikers individually, double the H2H exposure of a
-Striker slot. See `backtest.py` for how this was validated against real
-historical data — putting the best output in GK helped; additionally
-weighting by variance/ceiling on top of that was tested and found to
-hurt, not help, so the ranking here is by plain projected mean.)
+next 11 → Squad, bottom 2 → Bench.
+
+⚠️ **This GK-gets-the-best-player ordering needs re-checking.** It was
+originally justified by "the GK faces both opposing Strikers individually,
+double the H2H exposure of a Striker slot" and validated against real
+historical data in `backtest.py` — but that reasoning assumed the GK
+independently scores goals against the opponent's Strikers, which was
+later found to be **wrong** (the GK doesn't score its own goals at all —
+see the rules section above; confirmed by reproducing 4 real SKLW match
+results exactly only once that mechanic was removed). Under the
+corrected rules, a GK's score only matters defensively (denying the
+opponent's Strikers a bigger margin), while Strikers are the only
+individual role that scores FOR your own club — so the optimal
+assignment may no longer be "best player → GK." `backtest.py` needs to
+be re-run with the corrected `match_goals` to find out what actually
+works now; until then, treat this ordering as unvalidated rather than
+proven.
 
 By default the projected points come from FPL's own `ep_next` field.
 `--projections path/to/solio.csv` swaps that out for a Solio-style
@@ -250,13 +268,13 @@ triple-captain someone from the new squad) — saved as a separate
 
 `--fh "Manager Name"` marks a club member as playing Free Hit this GW
 and forces them into the suggested lineup's GK slot, regardless of their
-computed score. Reasoning: a GK faces BOTH opposing Strikers individually
-(two separate H2H battles), while each Striker only faces the one
-opposing GK — so a GK slot gets double the H2H exposure of a Striker
-slot. Free Hit scores also get no chip adjustment (unlike Bench Boost or
-Triple Captain), so they count at full value, and FH scores are often
-high and hard to project accurately from someone's normal squad — so
-that upside is worth more landing in the slot with double exposure.
+computed score. ⚠️ Same caveat as above — this was reasoned from the
+now-corrected-away "GK gets double H2H exposure" idea (see the rules
+section), so putting a high/hard-to-project FH score in GK specifically
+isn't validated under the real rules; a GK's score only matters
+defensively now, not as a second scoring opportunity. Free Hit scores
+still get no chip adjustment (unlike Bench Boost or Triple Captain), so
+they count at full value regardless of which role they land in.
 Repeat the flag for multiple managers on FH the same week; only one can
 actually take the GK slot (the higher-projected of them), the rest stay
 in the normal pool with a note printed.
@@ -376,9 +394,10 @@ number for that manager in every simulated trial, same as it is in
 `sklw_lineup.py`.
 
 Output also breaks down where the goals are expected to come from —
-Strikers-vs-their-GK, our-GK-vs-their-Strikers, Squad-vs-Squad — so you
-can see which part of the match is actually deciding the result, not
-just the final win/draw/loss split.
+Strikers-vs-their-GK, Squad-vs-Squad — so you can see which part of the
+match is actually deciding the result, not just the final win/draw/loss
+split. (There's no separate "GK battle" category — see the rules section
+above on why the GK doesn't independently score.)
 
 If you run this mid-gameweek (some matches already kicked off or
 finished), it automatically pulls FPL's live scores and locks in any
@@ -463,6 +482,14 @@ meaningfully better but still not perfect — treat "clearly favoured" as
 meaningful, exact numbers at the extremes with a bit more caution than
 the middle of the range.
 
+⚠️ **These Brier numbers are now stale.** They were all measured before
+the GK-scoring bug fix (see the rules section above) and the Squad
+formula reverting to the doc's actual `+1` base — `calibrate_matchup.py`
+needs to be re-run with the corrected `match_goals` to get current
+figures; the calibration *methodology* itself (train/test season split,
+formation-realistic squads, team-scoped correlation) is unaffected and
+still sound, just the specific numbers reported above predate this fix.
+
 ## Known gaps / next steps
 
 - No `docs/rules.md` yet — this README doubles as the rules reference for
@@ -474,9 +501,6 @@ the middle of the range.
   instead of `ep_next` — but that's a separate project (`fpl-model`,
   different repo, different session scope) and deliberately NOT wired in
   here to keep this tool fully standalone. Don't import from it directly.
-- Script has not yet been run against live data / verified against a
-  real GW — first real run is still pending. Treat output with normal
-  skepticism until confirmed once.
 - Error handling for manager IDs that 404 entirely (typo'd ID), a
   manager who hasn't set a team for the GW yet, or partial squads (< 15
   players, e.g. a brand new team) is best-effort: it skips/warns rather
@@ -484,3 +508,18 @@ the middle of the range.
 - `overrides.json` format is a first draft (out/in element ID lists) —
   untested for usability; may want a name-based format instead once used
   for real (the `--lookup` helper exists as a stopgap for this).
+- **`backtest.py` needs re-running with the corrected `match_goals`**
+  (GK-scoring mechanic removed, Squad formula reverted to the doc's `+1`
+  base — see the rules section). Its "put the single best player in GK"
+  finding was justified by the now-disproven "double H2H exposure"
+  reasoning; the actual optimal role-assignment strategy under the
+  corrected rules is an open question, not validated either way yet.
+- `calibrate_matchup.py`'s reported Brier scores also predate this fix
+  and need re-running for current numbers (see the accuracy section
+  above) — the methodology itself is unaffected, just the specific
+  figures.
+- `sklw_lineup.py`'s own scoring (`project_manager_score`) doesn't
+  simulate opponent matches so was never affected by the GK-scoring bug,
+  but its reasoning comments about GK/FH role priority still cite the
+  now-disproven "double exposure" logic and should be revisited once
+  `backtest.py` has a validated replacement strategy.
