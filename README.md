@@ -329,6 +329,14 @@ Strikers-vs-their-GK, our-GK-vs-their-Strikers, Squad-vs-Squad — so you
 can see which part of the match is actually deciding the result, not
 just the final win/draw/loss split.
 
+By default both sides' GK/Strikers/Squad/Bench are assigned by assumed-
+optimal projection ranking (same rule as `sklw_lineup.py`). If you
+actually know a club's REAL declared roles for this matchup (scouted
+from their lineup, rather than guessed), pin their 2 known Bench members
+by FPL manager ID instead of letting the tool assume: `--them-bench-ids
+"1859490,41471"` (or `--us-bench-ids` for our own club). The other 14 are
+still ranked as normal for GK/Strikers/Squad.
+
 **How accurate is it?** Run `python calibrate_matchup.py` to check —
 it builds synthetic matchups from real historical FPL data (two seasons:
 one purely to train the score-variance model, a DIFFERENT one to check

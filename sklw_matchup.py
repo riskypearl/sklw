@@ -350,6 +350,29 @@ def resolve_roster(spec: str | None, file_path: str | None, label: str) -> dict[
     return {}
 
 
+def resolve_bench_ids(spec: str | None, roster: dict[str, int], label: str) -> set[str]:
+    """Resolves a comma-separated list of FPL manager IDs (--them-bench-ids/
+    --us-bench-ids) to the matching names in `roster`, for assign_roles'
+    forced_bench. IDs rather than names since --them-file/--us-file names
+    may just be arbitrary placeholder labels (no known real names yet) --
+    matching by ID is unambiguous either way."""
+    if not spec:
+        return set()
+    id_to_name = {v: k for k, v in roster.items()}
+    names: set[str] = set()
+    for raw in [p.strip() for p in spec.split(",") if p.strip()]:
+        try:
+            mid = int(raw)
+        except ValueError:
+            print(f"ERROR: --{label} entries must be numeric manager IDs, got '{raw}'")
+            sys.exit(1)
+        if mid not in id_to_name:
+            print(f"WARNING: --{label} id {mid} isn't in this roster, ignored")
+            continue
+        names.add(id_to_name[mid])
+    return names
+
+
 def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: dict[int, float],
                        last_finished_gw: int, next_gw: int,
                        overrides: dict[str, dict]) -> tuple[dict[str, dict], list[str]]:
@@ -398,14 +421,36 @@ def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: 
     return club, failed
 
 
-def assign_roles(club: dict[str, dict]) -> dict[str, list[str]]:
+def assign_roles(club: dict[str, dict], forced_bench: set[str] | None = None) -> dict[str, list[str]]:
     """Same rule as sklw_lineup.py's suggest_lineup: top projected -> GK,
     next 2 -> Strikers, next 11 -> Squad, rest -> Bench. Fixed ONCE from
     projections (decision-time), same as a real captain would submit --
     the Monte Carlo layer below only varies the OUTCOME given this fixed
-    assignment, not the assignment itself."""
-    ranked = sorted(club, key=lambda n: -club[n]["projected"])
-    return {"gk": ranked[0:1], "strikers": ranked[1:3], "squad": ranked[3:14], "bench": ranked[14:16]}
+    assignment, not the assignment itself.
+
+    forced_bench: manager names KNOWN to actually be benched this week
+    (e.g. scouted from the opponent's real declared lineup, rather than
+    just assumed from projections) -- pinned to Bench regardless of
+    projection. The remaining 14 are ranked as normal (top -> GK, next 2
+    -> Strikers, rest -> Squad). Extra names beyond 2 are ignored (with a
+    warning) since Bench only has 2 slots; fewer than 2 fills the rest of
+    Bench from the bottom of the ranked pool as usual."""
+    forced_bench = forced_bench or set()
+    unknown = forced_bench - set(club)
+    if unknown:
+        print(f"WARNING: forced-bench name(s) not found in this club, ignored: {', '.join(unknown)}")
+        forced_bench = forced_bench - unknown
+    if len(forced_bench) > 2:
+        extra = sorted(forced_bench)[2:]
+        print(f"WARNING: more than 2 forced-bench names given, ignoring: {', '.join(extra)}")
+        forced_bench = set(sorted(forced_bench)[:2])
+
+    pool = [n for n in club if n not in forced_bench]
+    ranked = sorted(pool, key=lambda n: -club[n]["projected"])
+    need = 2 - len(forced_bench)
+    bench = sorted(forced_bench) + (ranked[-need:] if need else [])
+    rest = ranked[:-need] if need else ranked
+    return {"gk": rest[0:1], "strikers": rest[1:3], "squad": rest[3:14], "bench": bench}
 
 
 def h2h_goals(a_actual: float, b_actual: float) -> int:
@@ -556,6 +601,16 @@ def main():
                      help="override our own 16 managers (defaults to the "
                           "same roster as sklw_lineup.py's MANAGER_IDS)")
     ap.add_argument("--us-file", metavar="PATH", help="like --them-file, for our own roster")
+    ap.add_argument("--them-bench-ids", metavar="ID,ID",
+                     help="if you know the opponent's REAL declared Bench "
+                          "for this matchup (e.g. scouted from their "
+                          "lineup), pin those 2 manager IDs to Bench "
+                          "instead of letting the tool assume an optimal "
+                          "assignment for them too. Comma-separated FPL "
+                          "manager IDs, e.g. --them-bench-ids "
+                          "\"1859490,41471\".")
+    ap.add_argument("--us-bench-ids", metavar="ID,ID",
+                     help="same as --them-bench-ids, for our own club")
     ap.add_argument("--projections", metavar="CSV_PATH",
                      help="Solio-style projections CSV (see sklw_lineup.py). "
                           "Defaults to auto-detecting solio.csv / Downloads, "
@@ -630,8 +685,10 @@ def main():
         print("ERROR: too few managers fetched on one side to form a valid lineup (need 15)")
         sys.exit(1)
 
-    us_roles = assign_roles(us_club)
-    them_roles = assign_roles(them_club)
+    us_forced_bench = resolve_bench_ids(args.us_bench_ids, us_roster, "us-bench-ids")
+    them_forced_bench = resolve_bench_ids(args.them_bench_ids, them_roster, "them-bench-ids")
+    us_roles = assign_roles(us_club, us_forced_bench)
+    them_roles = assign_roles(them_club, them_forced_bench)
     print_roles("Us", us_club, us_roles)
     print_roles("Them", them_club, them_roles)
 
