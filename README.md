@@ -322,6 +322,21 @@ played would silently give a wrong real score. Before the deadline
 (only an older/fallback squad is available as a proxy), it still
 estimates via best-xi as before.
 
+The real starting-11 is read from `multiplier` (which player), not squad
+slot `position` (which stays frozen at the manager's ORIGINALLY declared
+lineup) — FPL applies AUTOMATIC SUBSTITUTIONS mid/post-gameweek (a
+starter who blanked gets swapped for a bench player who played) by
+updating `multiplier`, not `position`, so filtering by `position` alone
+silently keeps a blanked starter's zero and drops the real substitute's
+points entirely. Same for the real captain: identified by `multiplier >
+1`, not the static `is_captain` label, since FPL transfers the
+multiplier to the vice-captain if the real captain blanks but never
+moves that label. The one exception is Bench Boost, where `position` is
+still the right signal — SKLW overrides real FPL's own BB rule (bench
+still doesn't count here), and BB sets every pick's multiplier to 1
+including the bench, so multiplier can't distinguish them under that one
+chip. `sklw_lineup.py`'s scoring has the same fix.
+
 ```
 python sklw_matchup.py --them-file opponent.json
 ```

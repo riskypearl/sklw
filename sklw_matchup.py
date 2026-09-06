@@ -473,8 +473,30 @@ def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: 
                 continue
 
         if gw_used == next_gw:
-            starters = [p["element"] for p in picks_data["picks"] if p["position"] <= 11]
-            captain = next((p["element"] for p in picks_data["picks"] if p["is_captain"]), None)
+            chip = picks_data.get("active_chip")
+            if chip == "bboost":
+                # SKLW overrides real FPL's own BB rule -- bench still
+                # doesn't count -- so 'position' (frozen at declaration
+                # time) is the only reliable signal here, since BB sets
+                # EVERY pick's multiplier to 1 including bench.
+                starters = [p["element"] for p in picks_data["picks"] if p["position"] <= 11]
+            else:
+                # 'multiplier' (not 'position') is what FPL actually
+                # updates when an automatic substitution happens mid-
+                # gameweek (a starter who blanked gets swapped for a
+                # bench player who played) -- 'position' stays frozen at
+                # the ORIGINALLY declared lineup, so filtering by it
+                # alone silently keeps crediting a blanked starter's zero
+                # and drops the real substitute's points entirely.
+                starters = [p["element"] for p in picks_data["picks"] if p["multiplier"] > 0]
+            # 'is_captain' is also just the static pre-deadline label --
+            # if the real captain blanked, FPL transfers the multiplier
+            # to the vice-captain but the is_captain flag itself never
+            # moves. 'multiplier > 1' is the actual ground truth for who
+            # really got captained (x2 normally, x3 under Triple
+            # Captain -- SKLW's own x2-net rule still applies since this
+            # is only used to identify WHO, not to read the raw value).
+            captain = next((p["element"] for p in picks_data["picks"] if p["multiplier"] > 1), None)
         else:
             if "wildcard" in entry:
                 picks_data = apply_wildcard(picks_data, entry["wildcard"])

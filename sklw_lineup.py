@@ -348,16 +348,29 @@ def project_manager_score(picks_data: dict, points: dict[int, float]) -> float:
     the captain's score (since SKLW doesn't want chip effects skewing the
     inter-club scoring).
 
-    Starters are picks with squad slot 'position' <= 11, NOT 'multiplier' >
-    0 -- under Bench Boost, FPL's own API sets the bench's multiplier to 1
-    too (since their real points count that week), so filtering on
-    multiplier would silently include the bench exactly when SKLW's rule
-    says not to. 'position' (1-11 = starting XI, 12-15 = bench) reflects
-    the manager's actual starting-11 choice regardless of chip."""
+    Starters are picks with 'multiplier' > 0, NOT squad slot 'position' <=
+    11 -- 'position' is frozen at the manager's ORIGINALLY declared lineup
+    and never updates, but FPL applies AUTOMATIC SUBSTITUTIONS mid/post-
+    gameweek (a starter who blanked gets swapped for a bench player who
+    played) by updating 'multiplier' instead (0 for subbed-out, 1 for
+    subbed-in) -- filtering on 'position' alone silently keeps crediting a
+    blanked starter's zero and drops the real substitute's points
+    entirely. The one exception is Bench Boost: SKLW overrides real FPL's
+    own BB rule (bench still doesn't count here), and BB sets EVERY pick's
+    multiplier to 1 including the bench, so 'position' is the only
+    reliable signal specifically for that one chip.
+
+    The real captain is identified the same way, via whichever pick has
+    'multiplier' > 1 -- not the static 'is_captain' label, which never
+    moves even when FPL transfers the multiplier to the vice-captain
+    because the real captain blanked."""
     picks = picks_data["picks"]
     chip = picks_data.get("active_chip")  # "bboost", "3xc", "wildcard", "freehit", or None
 
-    starters = [p for p in picks if p["position"] <= 11]
+    if chip == "bboost":
+        starters = [p for p in picks if p["position"] <= 11]
+    else:
+        starters = [p for p in picks if p["multiplier"] > 0]
     total = 0.0
     captain_pts = 0.0
     for p in starters:
@@ -366,7 +379,7 @@ def project_manager_score(picks_data: dict, points: dict[int, float]) -> float:
             continue
         mult = p["multiplier"] if p["multiplier"] > 0 else 1
         total += pts * mult
-        if p["is_captain"]:
+        if p["multiplier"] > 1:
             captain_pts = pts * mult
 
     if chip == "3xc":
