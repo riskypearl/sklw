@@ -744,6 +744,15 @@ def main():
                           "--wildcard/--transfer/--tc/--set-score recorded "
                           "there is applied here too (matched by manager "
                           "ID, works for either roster).")
+    ap.add_argument("--explain-manager", metavar="NAME",
+                     help="print a player-by-player breakdown for one "
+                          "manager (their real starting-11, real captain, "
+                          "and each player's live/locked points if their "
+                          "match has started) instead of running the full "
+                          "simulation -- for checking a score against "
+                          "their actual FPL page when something looks "
+                          "wrong. Name must match a label in --them/"
+                          "--them-file/--us/--us-file.")
     args = ap.parse_args()
 
     if not args.them and not args.them_file:
@@ -798,6 +807,35 @@ def main():
     us_club, us_failed = build_club_scores(us_roster, players, points, last_finished_gw, next_gw, overrides)
     print("Fetching opponent's picks...")
     them_club, them_failed = build_club_scores(them_roster, players, points, last_finished_gw, next_gw, overrides)
+
+    if args.explain_manager:
+        name = args.explain_manager
+        club = us_club if name in us_club else them_club if name in them_club else None
+        if club is None:
+            print(f"ERROR: '{name}' not found in either roster")
+            sys.exit(1)
+        info = club[name]
+        print(f"\n=== {name} ===")
+        if "manual_score" in info:
+            print(f"Manual score override: {info['manual_score']}")
+            return
+        print(f"Real captain: {info['captain']}")
+        total = 0.0
+        for pid in info["starters"]:
+            el = players.get(pid)
+            pname = f"{el['first_name']} {el['second_name']}" if el else f"element #{pid}"
+            cap = " (C)" if pid == info["captain"] else ""
+            if pid in live_locked:
+                raw = live_locked[pid]
+                score = raw * 2 if pid == info["captain"] else raw
+                total += score
+                print(f"  {pname}{cap}: LIVE {raw:.1f}{' x2' if cap else ''} = {score:.1f}")
+            else:
+                proj = points.get(pid, 0.0)
+                print(f"  {pname}{cap}: not started yet, projection {proj:.1f} "
+                      f"(will be simulated, not shown here)")
+        print(f"\nReal known total so far: {total:.1f}")
+        return
 
     if us_failed:
         print(f"WARNING: could not fetch/score {len(us_failed)} of our managers, "
