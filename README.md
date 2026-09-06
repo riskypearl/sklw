@@ -290,6 +290,36 @@ vrawn: 4
 
 Already filled into `MANAGER_IDS` at the top of `sklw_lineup.py`.
 
+## Match win-probability estimator (`sklw_matchup.py`)
+
+Standalone (separate from `sklw_lineup.py`, same convention as
+`draft_lineup.py`/`backtest.py`) — estimates the probability of beating
+another SKLW club in a given matchweek, given both clubs' 16 real FPL
+manager IDs.
+
+A plain point projection only gives you a mean, not a probability — to
+actually answer "what's our win chance" you need to know how much a real
+score typically varies around that mean too. This builds that variance
+model from real historical FPL data (same public archive `backtest.py`
+already uses, same goal-scoring formulas), split by position since
+attackers are far more volatile than defenders, then Monte Carlo
+simulates several thousand matchweeks and reports what fraction your
+club wins.
+
+```
+python sklw_matchup.py --them-file opponent.json
+```
+`opponent.json` is just `{"Name": id, ...}` for their 16 managers — get
+these from the manager's own FPL page URL (`fantasy.premierleague.com/
+entry/<ID>/...`), same as any FPL manager ID. Our own roster defaults to
+`sklw_lineup.py`'s `MANAGER_IDS`; override with `--us-file` for a
+different matchup. Add `--projections solio.csv` for Solio-based
+projections instead of `ep_next` (same CSV format as `sklw_lineup.py`).
+
+**v1 limitation:** doesn't apply `sklw_lineup.py`'s chip overrides
+(`--wildcard`/`--tc`/etc from `overrides.json`) yet — uses each
+manager's real/fallback picks and best-xi as-is.
+
 ## Known gaps / next steps
 
 - No `docs/rules.md` yet — this README doubles as the rules reference for
