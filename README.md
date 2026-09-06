@@ -406,10 +406,16 @@ actually still undecided, rather than trusting the percentage blind.
 By default both sides' GK/Strikers/Squad/Bench are assigned by assumed-
 optimal projection ranking (same rule as `sklw_lineup.py`). If you
 actually know a club's REAL declared roles for this matchup (scouted
-from their lineup, rather than guessed), pin their 2 known Bench members
-by FPL manager ID instead of letting the tool assume: `--them-bench-ids
-"1859490,41471"` (or `--us-bench-ids` for our own club). The other 14 are
-still ranked as normal for GK/Strikers/Squad.
+from their lineup, rather than guessed), pin them by FPL manager ID
+instead of letting the tool assume:
+```
+--them-gk-id "879" --them-strikers-ids "627589,111982" --them-bench-ids "1859490,41471"
+```
+(or the `--us-gk-id`/`--us-strikers-ids`/`--us-bench-ids` equivalents for
+our own club). Pin as many or as few of these as you actually know —
+whatever's left unpinned still gets ranked as normal to fill the
+remaining slots. A name pinned to more than one role is resolved by
+priority GK > Strikers > Bench rather than erroring.
 
 **How accurate is it?** Run `python calibrate_matchup.py` to check —
 it builds synthetic matchups from real historical FPL data (two seasons:
