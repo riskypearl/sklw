@@ -18,8 +18,14 @@ must submit a lineup drawn from those 16 members' real GW scores:
 - **1 Goalkeeper** — H2H battle vs the opponent's 2 Strikers (same
   scoring, mirrored). Both Strikers and GK reward being HIGH-scoring —
   there's no benefit to hiding a weak member here.
-- **11 Squad** — summed FPL score vs the opponent's 11. +1 goal per 30
-  points the combined total beats the opponent by.
+- **11 Squad** — summed FPL score vs the opponent's 11. 1 goal per FULL
+  30-point margin the combined total beats the opponent by — UNLIKE
+  Strikers/GK, there's no separate base goal just for beating them at
+  all (a 1-29 point win is still 0 goals; you need the full 30 to score
+  even the first one). Confirmed against a real SKLW result (a real
+  52-point squad margin produced exactly 1 goal, not 2) after an earlier
+  version of this repo's code had it wrong (copied the Strikers/GK
+  "base + bonus" shape onto Squad by mistake).
 - **2 Bench** — don't count.
 
 Full rules: see `docs/rules.md` (paste of the original rules doc) if

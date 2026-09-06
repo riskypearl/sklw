@@ -532,10 +532,14 @@ def h2h_goals(a_actual: float, b_actual: float) -> int:
 
 
 def squad_goals(a_total: float, b_total: float) -> int:
-    """SKLW's own rule: 1 goal per full 30-point margin, tie = 0 both
-    sides. Identical to backtest.py's squad_goals."""
+    """SKLW's own rule: 1 goal per full 30-point margin -- UNLIKE the H2H
+    rule (h2h_goals), there's no separate 'base' goal just for beating
+    the opponent at all; you need a FULL 30-point margin to score even
+    the first goal (a 1-29 point win is still 0). Confirmed against a
+    real SKLW result: a real 52-point squad margin produced exactly 1
+    goal, not 2 -- so this is margin // 30, no '+ 1'."""
     margin = a_total - b_total
-    return int(margin // 30) + 1 if margin >= 1 else 0
+    return int(margin // 30) if margin >= 1 else 0
 
 
 def match_goals_breakdown(scores: dict[str, float], roles: dict[str, list[str]],

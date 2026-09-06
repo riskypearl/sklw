@@ -149,8 +149,12 @@ def h2h_goals(a: float, b: float) -> int:
 
 
 def squad_goals(a: float, b: float) -> int:
+    """UNLIKE h2h_goals, no base goal just for beating the opponent --
+    needs a full 30-point margin to score even the first goal. Confirmed
+    against a real SKLW result: a real 52-point margin produced exactly
+    1 goal, not 2."""
     margin = a - b
-    return int(margin // 30) + 1 if margin >= 1 else 0
+    return int(margin // 30) if margin >= 1 else 0
 
 
 def match_goals(scores: list[float], roles: dict[str, list[int]],
