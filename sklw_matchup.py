@@ -174,9 +174,21 @@ def find_solio_csv() -> Path | None:
 
 
 def pick_best_eleven(picks_data: dict, players: dict[int, dict],
-                      points: dict[int, float]) -> tuple[list[int], int | None]:
+                      points: dict[int, float],
+                      forced_captain: int | None = None) -> tuple[list[int], int | None]:
     """See sklw_lineup.py for full reasoning -- identical formation-valid
-    best-XI logic (no forced-captain support here, v1 doesn't need it)."""
+    best-XI logic, including forced_captain support for --tc: a real
+    Triple Captain pick may not be the squad's single highest-projected
+    player, so it can't just be inferred from the formation optimization.
+    If the forced pick isn't already in the computed XI, it's swapped in
+    for the weakest starter in the SAME position group. Ignored (with a
+    warning) if the pick isn't even in this manager's squad at all."""
+    squad_ids = {p["element"] for p in picks_data["picks"]}
+    if forced_captain is not None and forced_captain not in squad_ids:
+        print(f"WARNING: Triple Captain pick (element #{forced_captain}) isn't "
+              f"in this manager's squad -- ignoring forced captain")
+        forced_captain = None
+
     by_pos: dict[int, list[tuple[float, int]]] = {1: [], 2: [], 3: [], 4: []}
     for p in picks_data["picks"]:
         el = players.get(p["element"])
@@ -202,8 +214,37 @@ def pick_best_eleven(picks_data: dict, players: dict[int, dict],
                 best_total = total
                 best_outfield = combo
     starters = ([gk] if gk else []) + best_outfield
-    captain = max(starters)[1] if starters else None
+
+    if forced_captain is not None:
+        starter_ids = [pid for _, pid in starters]
+        if forced_captain not in starter_ids:
+            fc_pos = players[forced_captain]["element_type"]
+            fc_pts = points.get(forced_captain, 0.0)
+            group_idx = [i for i, (_, pid) in enumerate(starters)
+                         if players[pid]["element_type"] == fc_pos]
+            weakest_idx = min(group_idx, key=lambda i: starters[i][0])
+            starters[weakest_idx] = (fc_pts, forced_captain)
+        captain = forced_captain
+    else:
+        captain = max(starters)[1] if starters else None
+
     return [pid for _, pid in starters], captain
+
+
+def apply_overrides(picks_data: dict, override: dict) -> dict:
+    """See sklw_lineup.py for full reasoning -- identical out/in swap."""
+    picks = [dict(p) for p in picks_data["picks"]]
+    swap = dict(zip(override.get("out", []), override.get("in", [])))
+    for p in picks:
+        if p["element"] in swap:
+            p["element"] = swap[p["element"]]
+    return {**picks_data, "picks": picks}
+
+
+def apply_wildcard(picks_data: dict, wildcard_ids: list[int]) -> dict:
+    """See sklw_lineup.py for full reasoning -- replaces the entire squad."""
+    picks = [{"element": eid} for eid in wildcard_ids]
+    return {**picks_data, "picks": picks, "active_chip": "wildcard"}
 
 
 POSITION_NAMES = {1: "GK", 2: "DEF", 3: "MID", 4: "FWD"}
@@ -310,19 +351,43 @@ def resolve_roster(spec: str | None, file_path: str | None, label: str) -> dict[
 
 
 def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: dict[int, float],
-                       last_finished_gw: int, next_gw: int) -> tuple[dict[str, dict], list[str]]:
-    """Fetches each of the 16 managers' picks, computes their best-xi +
-    captain (decision-time, from current projections), and returns
-    per-manager {'starters': [...], 'captain': id, 'projected': float}
-    plus a list of any manager names that failed to fetch (skipped)."""
+                       last_finished_gw: int, next_gw: int,
+                       overrides: dict[str, dict]) -> tuple[dict[str, dict], list[str]]:
+    """Fetches each of the 16 managers' picks, applies any chip overrides
+    recorded via sklw_lineup.py's --wildcard/--transfer/--tc/--set-score
+    (same overrides.json, same format -- see sklw_lineup.py for the full
+    reasoning on each), computes their best-xi + captain (decision-time,
+    from current projections), and returns per-manager {'starters': [...],
+    'captain': id, 'projected': float} plus a list of any manager names
+    that failed to fetch (skipped). A 'manual_score' override skips
+    picks/points entirely -- starters is left empty and 'manual_score' is
+    set, which simulate_manager_score treats as a fixed, zero-variance
+    contribution (the manager told us the number directly, no guessing
+    needed)."""
     club: dict[str, dict] = {}
     failed: list[str] = []
     for name, mid in roster.items():
+        entry = overrides.get(str(mid), {})
+
+        if "manual_score" in entry:
+            score = float(entry["manual_score"])
+            club[name] = {"starters": [], "captain": None, "projected": score, "manual_score": score}
+            continue
+
         picks_data, gw_used = fetch_picks_with_fallback(mid, last_finished_gw, next_gw)
         if picks_data is None:
-            failed.append(name)
-            continue
-        starters, captain = pick_best_eleven(picks_data, players, points)
+            if "wildcard" in entry:
+                picks_data = {"picks": []}  # wildcard replaces the squad entirely, no base needed
+            else:
+                failed.append(name)
+                continue
+
+        if "wildcard" in entry:
+            picks_data = apply_wildcard(picks_data, entry["wildcard"])
+        elif entry.get("out") or entry.get("in"):
+            picks_data = apply_overrides(picks_data, entry)
+
+        starters, captain = pick_best_eleven(picks_data, players, points, entry.get("tc_captain"))
         if not starters:
             failed.append(name)
             continue
@@ -357,19 +422,29 @@ def squad_goals(a_total: float, b_total: float) -> int:
     return int(margin // 30) + 1 if margin >= 1 else 0
 
 
+def match_goals_breakdown(scores: dict[str, float], roles: dict[str, list[str]],
+                           opp_scores: dict[str, float],
+                           opp_roles: dict[str, list[str]]) -> dict[str, int]:
+    """Goals FOR the 'scores' side, split by which battle they came from
+    -- our Strikers vs their GK, our GK vs their Strikers, our Squad vs
+    their Squad. Lets the final report show WHERE a match is likely to
+    be won or lost, not just the final tally. match_goals() is just the
+    sum of these three."""
+    striker_goals = sum(h2h_goals(scores[name], opp_scores[opp_roles["gk"][0]])
+                         for name in roles["strikers"])
+    gk_goals = sum(h2h_goals(scores[roles["gk"][0]], opp_scores[name])
+                   for name in opp_roles["strikers"])
+    own_squad = sum(scores[n] for n in roles["squad"])
+    opp_squad = sum(opp_scores[n] for n in opp_roles["squad"])
+    squad_g = squad_goals(own_squad, opp_squad)
+    return {"strikers": striker_goals, "gk": gk_goals, "squad": squad_g}
+
+
 def match_goals(scores: dict[str, float], roles: dict[str, list[str]],
                  opp_scores: dict[str, float], opp_roles: dict[str, list[str]]) -> int:
     """Goals FOR the 'scores' side. Same formula as backtest.py's
     match_goals -- call twice with sides swapped to get both scorelines."""
-    goals = 0
-    for name in roles["strikers"]:
-        goals += h2h_goals(scores[name], opp_scores[opp_roles["gk"][0]])
-    for name in opp_roles["strikers"]:
-        goals += h2h_goals(scores[roles["gk"][0]], opp_scores[name])
-    own_squad = sum(scores[n] for n in roles["squad"])
-    opp_squad = sum(opp_scores[n] for n in opp_roles["squad"])
-    goals += squad_goals(own_squad, opp_squad)
-    return goals
+    return sum(match_goals_breakdown(scores, roles, opp_scores, opp_roles).values())
 
 
 def simulate_manager_score(rng: random.Random, info: dict, players: dict[int, dict],
@@ -385,7 +460,12 @@ def simulate_manager_score(rng: random.Random, info: dict, players: dict[int, di
     real team's shared shock block for this trial where available
     (team_shocks/team_gw_residuals -- see build_team_gw_residuals),
     falling back to the plain pooled position distribution for a team
-    with no usable data that GW."""
+    with no usable data that GW. A 'manual_score' override (--set-score
+    in sklw_lineup.py) is a fixed, zero-variance number every trial --
+    the manager told us the number directly, nothing to simulate."""
+    if "manual_score" in info:
+        return info["manual_score"]
+
     total = 0.0
     for pid in info["starters"]:
         el = players.get(pid)
@@ -416,6 +496,8 @@ def run_simulation(rng: random.Random, us_club: dict[str, dict], us_roles: dict[
 
     wins = draws = losses = 0
     our_goals_total = their_goals_total = 0
+    our_breakdown_total = {"strikers": 0, "gk": 0, "squad": 0}
+    their_breakdown_total = {"strikers": 0, "gk": 0, "squad": 0}
     for _ in range(sims):
         team_shocks = pick_team_shocks(rng, teams_needed, team_gw_index)
         our_scores = {n: simulate_manager_score(rng, info, players, points, team_names,
@@ -424,10 +506,15 @@ def run_simulation(rng: random.Random, us_club: dict[str, dict], us_roles: dict[
         their_scores = {n: simulate_manager_score(rng, info, players, points, team_names,
                                                     team_shocks, team_gw_residuals, fallback_residuals)
                          for n, info in them_club.items()}
-        our_goals = match_goals(our_scores, us_roles, their_scores, them_roles)
-        their_goals = match_goals(their_scores, them_roles, our_scores, us_roles)
+        our_breakdown = match_goals_breakdown(our_scores, us_roles, their_scores, them_roles)
+        their_breakdown = match_goals_breakdown(their_scores, them_roles, our_scores, us_roles)
+        our_goals = sum(our_breakdown.values())
+        their_goals = sum(their_breakdown.values())
         our_goals_total += our_goals
         their_goals_total += their_goals
+        for k in our_breakdown_total:
+            our_breakdown_total[k] += our_breakdown[k]
+            their_breakdown_total[k] += their_breakdown[k]
         if our_goals > their_goals:
             wins += 1
         elif our_goals < their_goals:
@@ -440,6 +527,8 @@ def run_simulation(rng: random.Random, us_club: dict[str, dict], us_roles: dict[
         "loss_pct": 100 * losses / sims,
         "avg_goals_for": our_goals_total / sims,
         "avg_goals_against": their_goals_total / sims,
+        "avg_breakdown_for": {k: v / sims for k, v in our_breakdown_total.items()},
+        "avg_breakdown_against": {k: v / sims for k, v in their_breakdown_total.items()},
     }
 
 
@@ -476,6 +565,11 @@ def main():
                           "to build the position-based score-variance model")
     ap.add_argument("--sims", type=int, default=5000, help="number of Monte Carlo trials")
     ap.add_argument("--seed", type=int, default=None, help="fix the random seed for reproducible runs")
+    ap.add_argument("--overrides", default="overrides.json",
+                     help="path to sklw_lineup.py's overrides.json -- any "
+                          "--wildcard/--transfer/--tc/--set-score recorded "
+                          "there is applied here too (matched by manager "
+                          "ID, works for either roster).")
     args = ap.parse_args()
 
     if not args.them and not args.them_file:
@@ -516,10 +610,15 @@ def main():
     team_gw_index = build_team_gw_index(team_gw_residuals)
     team_names = {t["id"]: t["name"] for t in bootstrap["teams"]}
 
+    ov_path = Path(args.overrides)
+    overrides = json.loads(ov_path.read_text()) if ov_path.exists() else {}
+    if overrides:
+        print(f"Loaded {len(overrides)} chip override(s) from {ov_path}")
+
     print("\nFetching our club's picks...")
-    us_club, us_failed = build_club_scores(us_roster, players, points, last_finished_gw, next_gw)
+    us_club, us_failed = build_club_scores(us_roster, players, points, last_finished_gw, next_gw, overrides)
     print("Fetching opponent's picks...")
-    them_club, them_failed = build_club_scores(them_roster, players, points, last_finished_gw, next_gw)
+    them_club, them_failed = build_club_scores(them_roster, players, points, last_finished_gw, next_gw, overrides)
 
     if us_failed:
         print(f"WARNING: could not fetch/score {len(us_failed)} of our managers, "
@@ -547,6 +646,13 @@ def main():
     print(f"Draw: {result['draw_pct']:.1f}%")
     print(f"Loss: {result['loss_pct']:.1f}%")
     print(f"Average scoreline: {result['avg_goals_for']:.2f} - {result['avg_goals_against']:.2f}")
+
+    for_ = result["avg_breakdown_for"]
+    against = result["avg_breakdown_against"]
+    print(f"\nWhere the goals come from (average per matchweek):")
+    print(f"  Strikers vs their GK:  {for_['strikers']:.2f} - {against['gk']:.2f}")
+    print(f"  Our GK vs their Strikers: {for_['gk']:.2f} - {against['strikers']:.2f}")
+    print(f"  Squad vs Squad:        {for_['squad']:.2f} - {against['squad']:.2f}")
 
 
 if __name__ == "__main__":

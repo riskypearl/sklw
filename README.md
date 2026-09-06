@@ -316,9 +316,18 @@ entry/<ID>/...`), same as any FPL manager ID. Our own roster defaults to
 different matchup. Add `--projections solio.csv` for Solio-based
 projections instead of `ep_next` (same CSV format as `sklw_lineup.py`).
 
-**v1 limitation:** doesn't apply `sklw_lineup.py`'s chip overrides
-(`--wildcard`/`--tc`/etc from `overrides.json`) yet — uses each
-manager's real/fallback picks and best-xi as-is.
+Picks up the SAME `overrides.json` `sklw_lineup.py` writes to — any
+`--wildcard`/`--transfer`/`--tc`/`--set-score` already recorded there
+applies automatically (matched by manager ID, works for either roster,
+not just our own). `--overrides path.json` points at a different file if
+needed. A `manual_score` override is treated as a fixed, zero-variance
+number for that manager in every simulated trial, same as it is in
+`sklw_lineup.py`.
+
+Output also breaks down where the goals are expected to come from —
+Strikers-vs-their-GK, our-GK-vs-their-Strikers, Squad-vs-Squad — so you
+can see which part of the match is actually deciding the result, not
+just the final win/draw/loss split.
 
 **How accurate is it?** Run `python calibrate_matchup.py` to check —
 it builds synthetic matchups from real historical FPL data (two seasons:
