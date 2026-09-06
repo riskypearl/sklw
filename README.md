@@ -329,6 +329,19 @@ Strikers-vs-their-GK, our-GK-vs-their-Strikers, Squad-vs-Squad — so you
 can see which part of the match is actually deciding the result, not
 just the final win/draw/loss split.
 
+If you run this mid-gameweek (some matches already kicked off or
+finished), it automatically pulls FPL's live scores and locks in any
+player whose fixture has started or finished to their REAL points
+instead of still guessing at them with a projection — only players whose
+match genuinely hasn't started yet still get simulated. A player
+currently mid-match is locked to their CURRENT live score, not a
+predicted final one (a deliberate simplification — doesn't model the
+upside/downside still left in that specific match, but still strictly
+more accurate than pretending nothing has happened yet). Prints how many
+players got locked so you know it's using live data. Run well before the
+gameweek starts and this is a no-op — nothing's live yet, so it behaves
+exactly as before.
+
 By default both sides' GK/Strikers/Squad/Bench are assigned by assumed-
 optimal projection ranking (same rule as `sklw_lineup.py`). If you
 actually know a club's REAL declared roles for this matchup (scouted

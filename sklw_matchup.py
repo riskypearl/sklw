@@ -105,6 +105,56 @@ def fetch_picks_with_fallback(mid: int, last_finished_gw: int, next_gw: int) -> 
     return picks_data, gw_used
 
 
+def fetch_live_points(gw: int) -> dict[int, float]:
+    """Each player's REAL total_points so far in gameweek `gw` -- 0 if
+    their fixture hasn't started yet, their running total while it's in
+    progress, the final real score once it's finished. Public endpoint,
+    no login needed."""
+    data = get_json(f"{FPL_BASE}/event/{gw}/live/")
+    return {el["id"]: float(el["stats"]["total_points"]) for el in data["elements"]}
+
+
+def fetch_fixture_status(gw: int) -> dict[int, str]:
+    """real team_id -> 'not_started' | 'in_progress' | 'finished' for
+    gameweek `gw`. A team with no fixture that GW (blank gameweek)
+    simply has no entry -- callers should default a missing key to
+    'not_started'."""
+    fixtures = get_json(f"{FPL_BASE}/fixtures/?event={gw}")
+    status: dict[int, str] = {}
+    for f in fixtures:
+        if f.get("finished"):
+            s = "finished"
+        elif f.get("started"):
+            s = "in_progress"
+        else:
+            s = "not_started"
+        status[f["team_h"]] = s
+        status[f["team_a"]] = s
+    return status
+
+
+def build_live_locked(players: dict[int, dict], gw: int) -> dict[int, float]:
+    """Element IDs whose real outcome for `gw` is already partly or fully
+    known (their fixture has started or finished) -> their real points
+    so far, for simulate_manager_score to use as a FIXED value instead of
+    a projection + simulated residual -- once a match has happened,
+    there's no reason to keep guessing at it. A player mid-match is
+    locked to their CURRENT live score, not their eventual final one --
+    a deliberate simplification (doesn't model the remaining upside/
+    downside left in that specific match), but still strictly more
+    accurate than treating an in-progress player as if nothing had
+    happened yet. Returns {} harmlessly if run well before the GW starts
+    (every fixture 'not_started', nothing to lock)."""
+    live_points = fetch_live_points(gw)
+    team_status = fetch_fixture_status(gw)
+    locked: dict[int, float] = {}
+    for pid, el in players.items():
+        status = team_status.get(el["team"], "not_started")
+        if status in ("in_progress", "finished") and pid in live_points:
+            locked[pid] = live_points[pid]
+    return locked
+
+
 def ep_next_points(players: dict[int, dict]) -> dict[int, float]:
     return {pid: float(p.get("ep_next") or 0.0) for pid, p in players.items()}
 
@@ -496,7 +546,8 @@ def simulate_manager_score(rng: random.Random, info: dict, players: dict[int, di
                             points: dict[int, float], team_names: dict[int, str],
                             team_shocks: dict[str, int | None],
                             team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
-                            fallback_residuals: dict[str, list[float]]) -> float:
+                            fallback_residuals: dict[str, list[float]],
+                            live_locked: dict[int, float] | None = None) -> float:
     """One simulated real GW score for a manager: each starter's
     projected mean plus a resampled historical residual for their
     position, captain doubled AFTER adding the residual (matches how a
@@ -507,21 +558,30 @@ def simulate_manager_score(rng: random.Random, info: dict, players: dict[int, di
     falling back to the plain pooled position distribution for a team
     with no usable data that GW. A 'manual_score' override (--set-score
     in sklw_lineup.py) is a fixed, zero-variance number every trial --
-    the manager told us the number directly, nothing to simulate."""
+    the manager told us the number directly, nothing to simulate.
+
+    live_locked: element IDs whose real gameweek has already started or
+    finished (see build_live_locked) use their REAL points instead of a
+    projection+residual -- no need to keep guessing at a match that's
+    already happened."""
     if "manual_score" in info:
         return info["manual_score"]
 
+    live_locked = live_locked or {}
     total = 0.0
     for pid in info["starters"]:
-        el = players.get(pid)
-        pos = POSITION_NAMES.get(el["element_type"], "MID") if el else "MID"
-        team = team_names.get(el["team"]) if el else None
-        shock_gw = team_shocks.get(team) if team else None
-        pool = team_gw_residuals.get((team, shock_gw), {}).get(pos) if shock_gw is not None else None
-        if not pool:
-            pool = fallback_residuals[pos]
-        projected = points.get(pid, 0.0)
-        score = projected + rng.choice(pool)
+        if pid in live_locked:
+            score = live_locked[pid]
+        else:
+            el = players.get(pid)
+            pos = POSITION_NAMES.get(el["element_type"], "MID") if el else "MID"
+            team = team_names.get(el["team"]) if el else None
+            shock_gw = team_shocks.get(team) if team else None
+            pool = team_gw_residuals.get((team, shock_gw), {}).get(pos) if shock_gw is not None else None
+            if not pool:
+                pool = fallback_residuals[pos]
+            projected = points.get(pid, 0.0)
+            score = projected + rng.choice(pool)
         if pid == info["captain"]:
             score *= 2
         total += score
@@ -533,7 +593,8 @@ def run_simulation(rng: random.Random, us_club: dict[str, dict], us_roles: dict[
                     players: dict[int, dict], points: dict[int, float], team_names: dict[int, str],
                     team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
                     team_gw_index: dict[str, list[int]],
-                    fallback_residuals: dict[str, list[float]], sims: int) -> dict:
+                    fallback_residuals: dict[str, list[float]], sims: int,
+                    live_locked: dict[int, float] | None = None) -> dict:
     all_starter_ids = [pid for info in list(us_club.values()) + list(them_club.values())
                         for pid in info["starters"]]
     teams_needed = {team_names[players[pid]["team"]] for pid in all_starter_ids
@@ -546,10 +607,12 @@ def run_simulation(rng: random.Random, us_club: dict[str, dict], us_roles: dict[
     for _ in range(sims):
         team_shocks = pick_team_shocks(rng, teams_needed, team_gw_index)
         our_scores = {n: simulate_manager_score(rng, info, players, points, team_names,
-                                                 team_shocks, team_gw_residuals, fallback_residuals)
+                                                 team_shocks, team_gw_residuals, fallback_residuals,
+                                                 live_locked)
                       for n, info in us_club.items()}
         their_scores = {n: simulate_manager_score(rng, info, players, points, team_names,
-                                                    team_shocks, team_gw_residuals, fallback_residuals)
+                                                    team_shocks, team_gw_residuals, fallback_residuals,
+                                                    live_locked)
                          for n, info in them_club.items()}
         our_breakdown = match_goals_breakdown(our_scores, us_roles, their_scores, them_roles)
         their_breakdown = match_goals_breakdown(their_scores, them_roles, our_scores, us_roles)
@@ -655,6 +718,11 @@ def main():
     last_finished_gw, next_gw = current_and_next_gw(bootstrap)
     print(f"Last finished GW: {last_finished_gw}, projecting for GW: {next_gw}")
 
+    live_locked = build_live_locked(players, next_gw)
+    if live_locked:
+        print(f"GW{next_gw} already in progress -- {len(live_locked)} player(s) locked "
+              f"to their real live score instead of a projection")
+
     print(f"Fetching {args.season} historical data to model score variance...")
     rows = fetch_season_rows(args.season)
     fallback_residuals = build_position_residuals(rows)
@@ -696,7 +764,7 @@ def main():
     print(f"\nRunning {args.sims} simulated matchweeks...")
     result = run_simulation(rng, us_club, us_roles, them_club, them_roles,
                              players, points, team_names, team_gw_residuals,
-                             team_gw_index, fallback_residuals, args.sims)
+                             team_gw_index, fallback_residuals, args.sims, live_locked)
 
     print(f"\n=== Result ===")
     print(f"Win:  {result['win_pct']:.1f}%")
