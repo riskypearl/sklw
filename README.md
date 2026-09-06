@@ -320,6 +320,23 @@ projections instead of `ep_next` (same CSV format as `sklw_lineup.py`).
 (`--wildcard`/`--tc`/etc from `overrides.json`) yet — uses each
 manager's real/fallback picks and best-xi as-is.
 
+**How accurate is it?** Run `python calibrate_matchup.py` to check —
+it builds synthetic matchups from real historical FPL data (two seasons:
+one purely to train the score-variance model, a DIFFERENT one to check
+predictions against, so there's no lookahead), and reports whether
+"predicted 70% to win" actually wins about 70% of the time in reality,
+plus an overall Brier score (0 = perfect, 0.25 = no better than a coin
+flip). Last run: **Brier 0.206** (a real but modest improvement over
+guessing), and the model is measurably **overconfident at the
+extremes** — a "95% to win" call only actually won about 84% of the
+time, a "5%" call actually won about 11% — while the 30-60% range was
+well calibrated. Most likely cause: the model draws every player's
+outcome independently, but real players' scores are correlated (a team
+collectively blows up or collapses together) — that correlation would
+make real match totals swingier than the model assumes, which shows up
+exactly as overconfident tails. Treat "clearly favoured" as meaningful,
+but don't read the exact number too literally at the extreme ends yet.
+
 ## Known gaps / next steps
 
 - No `docs/rules.md` yet — this README doubles as the rules reference for
