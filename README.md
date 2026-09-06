@@ -342,6 +342,16 @@ players got locked so you know it's using live data. Run well before the
 gameweek starts and this is a no-op — nothing's live yet, so it behaves
 exactly as before.
 
+If anything's locked, it also prints a separate "Real score so far"
+section — the actual current scoreline computed ONLY from already-known
+real results (0 for anyone who hasn't played yet), plus exactly how many
+starters on each side are still pending. This exists so a suspiciously
+confident result isn't just a black box: if most of a gameweek has
+already been played (e.g. only one late kickoff left), the simulated
+win probability CAN legitimately collapse toward 100%/0% — check this
+section to see the real numbers behind that and how many players are
+actually still undecided, rather than trusting the percentage blind.
+
 By default both sides' GK/Strikers/Squad/Bench are assigned by assumed-
 optimal projection ranking (same rule as `sklw_lineup.py`). If you
 actually know a club's REAL declared roles for this matchup (scouted

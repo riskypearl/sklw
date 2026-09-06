@@ -640,6 +640,37 @@ def run_simulation(rng: random.Random, us_club: dict[str, dict], us_roles: dict[
     }
 
 
+def current_known_scores(club: dict[str, dict],
+                          live_locked: dict[int, float]) -> tuple[dict[str, float], dict[str, int]]:
+    """Per-manager score using ONLY already-known real results (live or
+    finished, via live_locked) -- 0 contribution for any starter whose
+    match hasn't started yet, since that's genuinely unknown, not a
+    guess. Also returns each manager's pending starter count, so it's
+    clear how much of that manager's score isn't decided yet. A
+    'manual_score' manager is fully known already (a human decision, not
+    a projection) -- 0 pending."""
+    known: dict[str, float] = {}
+    pending: dict[str, int] = {}
+    for name, info in club.items():
+        if "manual_score" in info:
+            known[name] = info["manual_score"]
+            pending[name] = 0
+            continue
+        total = 0.0
+        left = 0
+        for pid in info["starters"]:
+            if pid in live_locked:
+                score = live_locked[pid]
+                if pid == info["captain"]:
+                    score *= 2
+                total += score
+            else:
+                left += 1
+        known[name] = total
+        pending[name] = left
+    return known, pending
+
+
 def print_roles(label: str, club: dict[str, dict], roles: dict[str, list[str]]) -> None:
     print(f"\n{label} suggested roles (by projection):")
     print(f"  GK:       {roles['gk'][0]} ({club[roles['gk'][0]]['projected']:.1f})")
@@ -759,6 +790,25 @@ def main():
     them_roles = assign_roles(them_club, them_forced_bench)
     print_roles("Us", us_club, us_roles)
     print_roles("Them", them_club, them_roles)
+
+    if live_locked:
+        us_known, us_pending = current_known_scores(us_club, live_locked)
+        them_known, them_pending = current_known_scores(them_club, live_locked)
+        us_left = sum(us_pending.values())
+        them_left = sum(them_pending.values())
+        current_us_goals = match_goals(us_known, us_roles, them_known, them_roles)
+        current_them_goals = match_goals(them_known, them_roles, us_known, us_roles)
+        breakdown_us = match_goals_breakdown(us_known, us_roles, them_known, them_roles)
+        breakdown_them = match_goals_breakdown(them_known, them_roles, us_known, us_roles)
+        print(f"\n=== Real score so far (already-known results only, 0 for anyone "
+              f"who hasn't played yet) ===")
+        print(f"Current scoreline: {current_us_goals} - {current_them_goals}")
+        print(f"  Strikers vs their GK:  {breakdown_us['strikers']} - {breakdown_them['gk']}")
+        print(f"  Our GK vs their Strikers: {breakdown_us['gk']} - {breakdown_them['strikers']}")
+        print(f"  Squad vs Squad:        {breakdown_us['squad']} - {breakdown_them['squad']}")
+        print(f"Still to play: {us_left} of our starters, {them_left} of theirs "
+              f"({'; '.join(f'{n}: {p} pending' for n, p in us_pending.items() if p) or 'none'} "
+              f"| {'; '.join(f'{n}: {p} pending' for n, p in them_pending.items() if p) or 'none'})")
 
     rng = random.Random(args.seed)
     print(f"\nRunning {args.sims} simulated matchweeks...")
