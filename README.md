@@ -322,20 +322,29 @@ played would silently give a wrong real score. Before the deadline
 (only an older/fallback squad is available as a proxy), it still
 estimates via best-xi as before.
 
-The real starting-11 is read from `multiplier` (which player), not squad
-slot `position` (which stays frozen at the manager's ORIGINALLY declared
-lineup) — FPL applies AUTOMATIC SUBSTITUTIONS mid/post-gameweek (a
-starter who blanked gets swapped for a bench player who played) by
-updating `multiplier`, not `position`, so filtering by `position` alone
-silently keeps a blanked starter's zero and drops the real substitute's
-points entirely. Same for the real captain: identified by `multiplier >
-1`, not the static `is_captain` label, since FPL transfers the
-multiplier to the vice-captain if the real captain blanks but never
-moves that label. The one exception is Bench Boost, where `position` is
-still the right signal — SKLW overrides real FPL's own BB rule (bench
-still doesn't count here), and BB sets every pick's multiplier to 1
-including the bench, so multiplier can't distinguish them under that one
-chip. `sklw_lineup.py`'s scoring has the same fix.
+**Automatic substitutions.** FPL only finalizes real auto-subs (a starter
+who blanked getting swapped for a bench player who played) — and a
+captain → vice-captain transfer, if the real captain blanks — once the
+ENTIRE gameweek is over, not progressively as individual matches finish.
+That means neither `position`, `multiplier`, nor `is_captain` in live
+picks data reflect a sub that's already effectively locked in mid-
+gameweek (a starter's own match already finished with 0 minutes) — using
+any of them directly silently keeps a confirmed blank and drops whoever
+should already be subbed in. Instead this predicts what FPL will settle
+on, the same way a live-tracking site like livefpl.net does, but
+computed directly from the public FPL API rather than depending on a
+third-party site: a player only counts as a CONFIRMED blank once their
+OWN fixture has actually finished with 0 minutes (still in progress or
+not started yet just means "hasn't played", not "won't play" — never
+guessed at). GK blanks are replaced by the reserve GK if the reserve
+played; outfield blanks by the next eligible already-finished-and-played
+bench player in priority order, only if it keeps a legal formation. The
+one exception is Bench Boost, where the originally declared lineup is
+used directly — SKLW overrides real FPL's own BB rule (bench still
+doesn't count here) and there's no bench to sub in once BB is active
+anyway. `sklw_lineup.py`'s scoring keeps the simpler `position`/
+`is_captain` check (it doesn't yet have full auto-sub prediction) — a
+known gap there for a future pass if it turns out to matter in practice.
 
 ```
 python sklw_matchup.py --them-file opponent.json

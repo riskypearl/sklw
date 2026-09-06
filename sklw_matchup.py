@@ -105,13 +105,16 @@ def fetch_picks_with_fallback(mid: int, last_finished_gw: int, next_gw: int) -> 
     return picks_data, gw_used
 
 
-def fetch_live_points(gw: int) -> dict[int, float]:
-    """Each player's REAL total_points so far in gameweek `gw` -- 0 if
-    their fixture hasn't started yet, their running total while it's in
-    progress, the final real score once it's finished. Public endpoint,
-    no login needed."""
+def fetch_live_stats(gw: int) -> dict[int, dict]:
+    """Each player's REAL total_points AND minutes so far in gameweek
+    `gw` -- 0 if their fixture hasn't started yet, running values while
+    in progress, final once finished. Public endpoint, no login needed.
+    'minutes' is needed (not just points) to predict automatic
+    substitutions -- see predict_effective_lineup."""
     data = get_json(f"{FPL_BASE}/event/{gw}/live/")
-    return {el["id"]: float(el["stats"]["total_points"]) for el in data["elements"]}
+    return {el["id"]: {"points": float(el["stats"]["total_points"]),
+                        "minutes": int(el["stats"]["minutes"])}
+            for el in data["elements"]}
 
 
 def fetch_fixture_status(gw: int) -> dict[int, str]:
@@ -133,26 +136,108 @@ def fetch_fixture_status(gw: int) -> dict[int, str]:
     return status
 
 
-def build_live_locked(players: dict[int, dict], gw: int) -> dict[int, float]:
-    """Element IDs whose real outcome for `gw` is already partly or fully
-    known (their fixture has started or finished) -> their real points
-    so far, for simulate_manager_score to use as a FIXED value instead of
-    a projection + simulated residual -- once a match has happened,
-    there's no reason to keep guessing at it. A player mid-match is
-    locked to their CURRENT live score, not their eventual final one --
-    a deliberate simplification (doesn't model the remaining upside/
-    downside left in that specific match), but still strictly more
-    accurate than treating an in-progress player as if nothing had
-    happened yet. Returns {} harmlessly if run well before the GW starts
-    (every fixture 'not_started', nothing to lock)."""
-    live_points = fetch_live_points(gw)
-    team_status = fetch_fixture_status(gw)
+def build_live_locked(players: dict[int, dict], live_stats: dict[int, dict],
+                       team_status: dict[int, str]) -> dict[int, float]:
+    """Element IDs whose real outcome for this GW is already partly or
+    fully known (their fixture has started or finished) -> their real
+    points so far, for simulate_manager_score to use as a FIXED value
+    instead of a projection + simulated residual -- once a match has
+    happened, there's no reason to keep guessing at it. A player
+    mid-match is locked to their CURRENT live score, not their eventual
+    final one -- a deliberate simplification (doesn't model the
+    remaining upside/downside left in that specific match), but still
+    strictly more accurate than treating an in-progress player as if
+    nothing had happened yet. Returns {} harmlessly if run well before
+    the GW starts (every fixture 'not_started', nothing to lock)."""
     locked: dict[int, float] = {}
     for pid, el in players.items():
         status = team_status.get(el["team"], "not_started")
-        if status in ("in_progress", "finished") and pid in live_points:
-            locked[pid] = live_points[pid]
+        if status in ("in_progress", "finished") and pid in live_stats:
+            locked[pid] = live_stats[pid]["points"]
     return locked
+
+
+def _outfield_formation_ok(type_counts: dict[int, int]) -> bool:
+    d, mi, f = type_counts.get(2, 0), type_counts.get(3, 0), type_counts.get(4, 0)
+    return 3 <= d <= 5 and 2 <= mi <= 5 and 1 <= f <= 3 and d + mi + f == 10
+
+
+def predict_effective_lineup(picks_data: dict, live_stats: dict[int, dict],
+                              team_status: dict[int, str],
+                              players: dict[int, dict]) -> tuple[list[int], int | None]:
+    """Predicts the EFFECTIVE starting-11 and captain FPL will settle on
+    once this gameweek fully concludes. FPL only finalizes real
+    automatic substitutions -- and a captain -> vice-captain transfer, if
+    the real captain blanks -- once the ENTIRE gameweek is over, not
+    progressively as individual matches finish. That means 'multiplier'/
+    'is_captain' in live picks_data still reflect the ORIGINALLY declared
+    lineup throughout a live gameweek, even once some players' own
+    fixtures have already concluded with 0 minutes -- using them directly
+    mid-gameweek silently keeps a confirmed blank and drops whoever
+    should already be subbed in for them.
+
+    This simulates FPL's own real auto-sub algorithm instead (same
+    approach a live-tracking site like livefpl.net uses, but computed
+    here directly from the public FPL API rather than depending on a
+    third-party site): a player only counts as a CONFIRMED blank once
+    their own fixture has actually finished with 0 minutes -- if their
+    fixture is still in progress or hasn't started, they just haven't
+    played yet, which isn't the same thing and shouldn't trigger a sub.
+    GK blanks are replaced by the reserve GK if the reserve played;
+    outfield blanks are replaced by the next eligible (already played)
+    bench player in priority order, only if doing so keeps a legal
+    formation (3-5 DEF, 2-5 MID, 1-3 FWD)."""
+    picks_by_pos = {p["position"]: p for p in picks_data["picks"]}
+    starters = [picks_by_pos[i]["element"] for i in range(1, 12) if i in picks_by_pos]
+    bench = [picks_by_pos[i]["element"] for i in range(12, 16) if i in picks_by_pos]
+    orig_captain = next((p["element"] for p in picks_data["picks"] if p["is_captain"]), None)
+    orig_vice = next((p["element"] for p in picks_data["picks"] if p["is_vice_captain"]), None)
+
+    def team_of(pid: int) -> int | None:
+        return players[pid]["team"] if pid in players else None
+
+    def confirmed_blank(pid: int) -> bool:
+        status = team_status.get(team_of(pid), "not_started")
+        return status == "finished" and live_stats.get(pid, {"minutes": 0})["minutes"] == 0
+
+    def played(pid: int) -> bool:
+        return live_stats.get(pid, {"minutes": 0})["minutes"] > 0
+
+    effective = list(starters)
+    used_bench: set[int] = set()
+
+    gk = next((pid for pid in starters if players.get(pid, {}).get("element_type") == 1), None)
+    reserve_gk = next((pid for pid in bench if players.get(pid, {}).get("element_type") == 1), None)
+    if gk and confirmed_blank(gk) and reserve_gk and played(reserve_gk):
+        effective[effective.index(gk)] = reserve_gk
+        used_bench.add(reserve_gk)
+
+    outfield_bench = [pid for pid in bench if players.get(pid, {}).get("element_type") != 1]
+    for i, pid in enumerate(effective):
+        if players.get(pid, {}).get("element_type") == 1:
+            continue  # GK slot already handled above
+        if not confirmed_blank(pid):
+            continue
+        for sub in outfield_bench:
+            if sub in used_bench or not played(sub):
+                continue
+            candidate = effective.copy()
+            candidate[i] = sub
+            counts: dict[int, int] = {}
+            for cid in candidate:
+                t = players.get(cid, {}).get("element_type")
+                if t and t != 1:
+                    counts[t] = counts.get(t, 0) + 1
+            if _outfield_formation_ok(counts):
+                effective[i] = sub
+                used_bench.add(sub)
+                break
+
+    captain = orig_captain
+    if orig_captain is not None and confirmed_blank(orig_captain) and orig_vice and played(orig_vice):
+        captain = orig_vice
+
+    return effective, captain
 
 
 def ep_next_points(players: dict[int, dict]) -> dict[int, float]:
@@ -424,27 +509,33 @@ def resolve_bench_ids(spec: str | None, roster: dict[str, int], label: str) -> s
 
 
 def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: dict[int, float],
-                       last_finished_gw: int, next_gw: int,
-                       overrides: dict[str, dict]) -> tuple[dict[str, dict], list[str]]:
+                       last_finished_gw: int, next_gw: int, overrides: dict[str, dict],
+                       live_stats: dict[int, dict], team_status: dict[int, str]
+                       ) -> tuple[dict[str, dict], list[str]]:
     """Fetches each of the 16 managers' picks and returns per-manager
     {'starters': [...], 'captain': id, 'projected': float} plus a list of
     any manager names that failed to fetch (skipped).
 
     Whenever the manager's REAL picks for the target GW are actually
-    confirmed (gw_used == next_gw, deadline already passed) -- their
-    ACTUAL submitted starting-11 ('position' <= 11, chip-agnostic per
-    SKLW's own rule that Bench Boost still doesn't count the bench) and
-    ACTUAL real captain (the real 'is_captain' flag) are used AS-IS, not
-    guessed at via best-xi. This matters a lot once a real GW is
-    underway: a manager's real captain (including a real Triple Captain)
-    might not be whoever the highest-projected player in their squad
-    happens to be, and once their game has partly or fully played out
-    (see build_live_locked), doubling the WRONG player instead of their
-    real one would silently produce a wrong 'real score so far'. SKLW
-    nets Triple Captain down to exactly a normal x2 captain regardless
-    (see sklw_lineup.py) -- since this always applies a flat x2 to
-    whichever player was REALLY captained, that net effect falls out
-    automatically with no separate chip-specific adjustment needed.
+    confirmed (gw_used == next_gw, deadline already passed), their
+    EFFECTIVE starting-11 and captain are predicted rather than guessed
+    at via best-xi -- accounting for automatic substitutions and a
+    possible captain -> vice transfer that FPL itself won't reflect in
+    the raw picks data until the entire gameweek is over (see
+    predict_effective_lineup). Bench Boost is the one exception, where
+    the originally declared 'position'/'is_captain' are used directly
+    (SKLW overrides real FPL's own BB rule so bench never counts, and
+    there's no bench to sub in anyway once BB is active). This matters a
+    lot once a real GW is underway: a manager's real captain (including a
+    real Triple Captain) might not be whoever the highest-projected
+    player in their squad happens to be, and once their game has partly
+    or fully played out (see build_live_locked), doubling the WRONG
+    player instead of their real one would silently produce a wrong
+    'real score so far'. SKLW nets Triple Captain down to exactly a
+    normal x2 captain regardless (see sklw_lineup.py) -- since this
+    always applies a flat x2 to whichever player was REALLY captained,
+    that net effect falls out automatically with no separate chip-
+    specific adjustment needed.
     overrides.json's --wildcard/--transfer/--tc/--set-score only apply
     when real picks AREN'T available yet (an older/fallback squad is
     being used as a pre-deadline planning proxy) -- once real, confirmed
@@ -476,27 +567,21 @@ def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: 
             chip = picks_data.get("active_chip")
             if chip == "bboost":
                 # SKLW overrides real FPL's own BB rule -- bench still
-                # doesn't count -- so 'position' (frozen at declaration
-                # time) is the only reliable signal here, since BB sets
-                # EVERY pick's multiplier to 1 including bench.
+                # doesn't count -- so 'position' (the originally declared
+                # lineup) is the right signal here regardless of subs,
+                # since BB sets EVERY pick's multiplier to 1 including
+                # bench and there's no bench to ever sub in anyway.
                 starters = [p["element"] for p in picks_data["picks"] if p["position"] <= 11]
+                captain = next((p["element"] for p in picks_data["picks"] if p["is_captain"]), None)
             else:
-                # 'multiplier' (not 'position') is what FPL actually
-                # updates when an automatic substitution happens mid-
-                # gameweek (a starter who blanked gets swapped for a
-                # bench player who played) -- 'position' stays frozen at
-                # the ORIGINALLY declared lineup, so filtering by it
-                # alone silently keeps crediting a blanked starter's zero
-                # and drops the real substitute's points entirely.
-                starters = [p["element"] for p in picks_data["picks"] if p["multiplier"] > 0]
-            # 'is_captain' is also just the static pre-deadline label --
-            # if the real captain blanked, FPL transfers the multiplier
-            # to the vice-captain but the is_captain flag itself never
-            # moves. 'multiplier > 1' is the actual ground truth for who
-            # really got captained (x2 normally, x3 under Triple
-            # Captain -- SKLW's own x2-net rule still applies since this
-            # is only used to identify WHO, not to read the raw value).
-            captain = next((p["element"] for p in picks_data["picks"] if p["multiplier"] > 1), None)
+                # FPL only finalizes real automatic substitutions (and a
+                # captain -> vice transfer) once the ENTIRE gameweek is
+                # over, not progressively -- so mid-gameweek, neither
+                # 'multiplier' nor 'is_captain'/'position' yet reflect a
+                # sub that's already effectively locked in (a starter's
+                # own fixture already finished with 0 minutes). Predict
+                # what FPL will settle on instead of waiting for it.
+                starters, captain = predict_effective_lineup(picks_data, live_stats, team_status, players)
         else:
             if "wildcard" in entry:
                 picks_data = apply_wildcard(picks_data, entry["wildcard"])
@@ -805,7 +890,9 @@ def main():
     last_finished_gw, next_gw = current_and_next_gw(bootstrap)
     print(f"Last finished GW: {last_finished_gw}, projecting for GW: {next_gw}")
 
-    live_locked = build_live_locked(players, next_gw)
+    live_stats = fetch_live_stats(next_gw)
+    team_status = fetch_fixture_status(next_gw)
+    live_locked = build_live_locked(players, live_stats, team_status)
     if live_locked:
         print(f"GW{next_gw} already in progress -- {len(live_locked)} player(s) locked "
               f"to their real live score instead of a projection")
@@ -826,9 +913,11 @@ def main():
         print(f"Loaded {len(overrides)} chip override(s) from {ov_path}")
 
     print("\nFetching our club's picks...")
-    us_club, us_failed = build_club_scores(us_roster, players, points, last_finished_gw, next_gw, overrides)
+    us_club, us_failed = build_club_scores(us_roster, players, points, last_finished_gw, next_gw,
+                                            overrides, live_stats, team_status)
     print("Fetching opponent's picks...")
-    them_club, them_failed = build_club_scores(them_roster, players, points, last_finished_gw, next_gw, overrides)
+    them_club, them_failed = build_club_scores(them_roster, players, points, last_finished_gw, next_gw,
+                                                overrides, live_stats, team_status)
 
     if args.explain_manager:
         name = args.explain_manager
