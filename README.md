@@ -77,24 +77,23 @@ Two modes:
 
 Output: projects each of the 16 members' GW score (sum of projected points
 over their 11 starters, captain doubled, chip-adjusted per SKLW's rule
-above), then suggests a lineup — **top scorer → GK**, next 2 → Strikers,
+above), then suggests a lineup — **top 2 scorers → Strikers**, next → GK,
 next 11 → Squad, bottom 2 → Bench.
 
-⚠️ **This GK-gets-the-best-player ordering needs re-checking.** It was
-originally justified by "the GK faces both opposing Strikers individually,
-double the H2H exposure of a Striker slot" and validated against real
-historical data in `backtest.py` — but that reasoning assumed the GK
-independently scores goals against the opponent's Strikers, which was
-later found to be **wrong** (the GK doesn't score its own goals at all —
-see the rules section above; confirmed by reproducing 4 real SKLW match
-results exactly only once that mechanic was removed). Under the
-corrected rules, a GK's score only matters defensively (denying the
-opponent's Strikers a bigger margin), while Strikers are the only
-individual role that scores FOR your own club — so the optimal
-assignment may no longer be "best player → GK." `backtest.py` needs to
-be re-run with the corrected `match_goals` to find out what actually
-works now; until then, treat this ordering as unvalidated rather than
-proven.
+This flips what an earlier version of this tool did (best player → GK).
+That was justified by "the GK faces both opposing Strikers individually,
+double the H2H exposure of a Striker slot" — but the GK does **not**
+independently score goals at all (see the rules section above; confirmed
+by reproducing 4 real SKLW match results exactly only once that mechanic
+was removed from every scoring file in this repo). Only Strikers convert
+a high score into goals for your own club; a GK's high score only denies
+the opponent's Strikers a bigger margin. Re-ran `backtest.py` against
+real historical FPL data with the corrected scoring to check: top-2-to-
+Strikers/3rd-to-GK beats best-to-GK decisively (2.43 vs 2.15 average
+goals per matchweek, winning head-to-head 36% to 13% of the time), and
+ceiling/variance-weighting the top picks on top of that doesn't close
+the gap either — so this is plain top-3 by projected mean, no further
+weighting, same as before just in the corrected order.
 
 By default the projected points come from FPL's own `ep_next` field.
 `--projections path/to/solio.csv` swaps that out for a Solio-style
@@ -267,17 +266,15 @@ triple-captain someone from the new squad) — saved as a separate
 --mode preview` separately afterwards.
 
 `--fh "Manager Name"` marks a club member as playing Free Hit this GW
-and forces them into the suggested lineup's GK slot, regardless of their
-computed score. ⚠️ Same caveat as above — this was reasoned from the
-now-corrected-away "GK gets double H2H exposure" idea (see the rules
-section), so putting a high/hard-to-project FH score in GK specifically
-isn't validated under the real rules; a GK's score only matters
-defensively now, not as a second scoring opportunity. Free Hit scores
-still get no chip adjustment (unlike Bench Boost or Triple Captain), so
-they count at full value regardless of which role they land in.
-Repeat the flag for multiple managers on FH the same week; only one can
-actually take the GK slot (the higher-projected of them), the rest stay
-in the normal pool with a note printed.
+and forces them into the suggested lineup's Strikers first (not GK) —
+an FH score's inherent unpredictability/upside converts directly into
+goals as a Striker, whereas GK only benefits defensively from being
+high, so the scoring role gets first claim on it. Free Hit scores get
+no chip adjustment (unlike Bench Boost or Triple Captain), so they
+count at full value regardless of which role they land in. Repeat the
+flag for multiple managers on FH the same week — up to 2 take the
+Striker slots, a 3rd takes GK, any beyond that stay in the normal pool
+with a note printed.
 
 Every run also prints a banner up front with the club name ("Algorithm
 and Blues" — edit `CLUB_NAME` at the top of the script if this changes)
@@ -474,7 +471,7 @@ ablation:
 
 The middle row confirms the formation fix alone isn't what helped — it's
 the team correlation specifically, and it only shows up once the test
-squads are realistic enough to expose it. **This is now live in
+squads are realistic enough to expose it. **This is live in
 `sklw_matchup.py`** (`build_team_gw_residuals`/`pick_team_shocks`) since
 real FPL squads are already formation-realistic by construction
 (`pick_best_eleven`), so this result transfers. Calibration is
@@ -482,13 +479,16 @@ meaningfully better but still not perfect — treat "clearly favoured" as
 meaningful, exact numbers at the extremes with a bit more caution than
 the middle of the range.
 
-⚠️ **These Brier numbers are now stale.** They were all measured before
-the GK-scoring bug fix (see the rules section above) and the Squad
-formula reverting to the doc's actual `+1` base — `calibrate_matchup.py`
-needs to be re-run with the corrected `match_goals` to get current
-figures; the calibration *methodology* itself (train/test season split,
-formation-realistic squads, team-scoped correlation) is unaffected and
-still sound, just the specific numbers reported above predate this fix.
+**Re-ran the full calibration after fixing the GK-scoring bug and
+reverting the Squad formula** (see the rules section above — every
+number before this point predates that fix): **Brier 0.198**, right in
+line with the pre-fix 0.194 best result, so the team-correlation finding
+and overall calibration quality both hold up under the corrected rules.
+Same overconfident-at-the-extremes pattern as before (e.g. a "90-100%"
+bucket realized 92%, a "0-10%" bucket realized 9% — both close, but the
+60-80% range undershot a bit more this time). Nothing here suggests the
+earlier findings were artifacts of the bug — the calibration
+*methodology* was always independent of it.
 
 ## Known gaps / next steps
 
@@ -508,18 +508,22 @@ still sound, just the specific numbers reported above predate this fix.
 - `overrides.json` format is a first draft (out/in element ID lists) —
   untested for usability; may want a name-based format instead once used
   for real (the `--lookup` helper exists as a stopgap for this).
-- **`backtest.py` needs re-running with the corrected `match_goals`**
+- **`backtest.py` has been re-run under the corrected `match_goals`**
   (GK-scoring mechanic removed, Squad formula reverted to the doc's `+1`
-  base — see the rules section). Its "put the single best player in GK"
-  finding was justified by the now-disproven "double H2H exposure"
-  reasoning; the actual optimal role-assignment strategy under the
-  corrected rules is an open question, not validated either way yet.
-- `calibrate_matchup.py`'s reported Brier scores also predate this fix
-  and need re-running for current numbers (see the accuracy section
-  above) — the methodology itself is unaffected, just the specific
-  figures.
-- `sklw_lineup.py`'s own scoring (`project_manager_score`) doesn't
-  simulate opponent matches so was never affected by the GK-scoring bug,
-  but its reasoning comments about GK/FH role priority still cite the
-  now-disproven "double exposure" logic and should be revisited once
-  `backtest.py` has a validated replacement strategy.
+  base). Result: the old "put the single best player in GK" strategy is
+  now decisively disproven — **top 2 by projection → Strikers, 3rd →
+  GK** averages 2.434 goals/matchweek and wins head-to-head 36.2% of the
+  time, vs. 2.151 goals and a 12.8% win rate for best-player-to-GK. This
+  is now the live default in both `sklw_lineup.py` (`suggest_lineup`) and
+  `sklw_matchup.py`/`calibrate_matchup.py` (`assign_roles`).
+- `calibrate_matchup.py` has also been re-run with the corrected rules
+  and role priority — see the accuracy section above (Brier 0.198,
+  consistent with the earlier team-correlation finding).
+- `sklw_lineup.py` still lacks the full auto-sub *prediction* that
+  `sklw_matchup.py` has (`predict_effective_lineup`, driven by live
+  minutes and `finished_provisional`). It only uses the real
+  `multiplier`/`position` fields, which FPL doesn't update until the
+  entire gameweek ends — so mid-gameweek its projections for a manager
+  with a blank starter can be stale the same way `sklw_matchup.py`'s were
+  before that fix. Porting `predict_effective_lineup` over is the
+  natural next step if this becomes a problem in practice.

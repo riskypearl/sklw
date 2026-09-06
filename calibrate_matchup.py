@@ -181,8 +181,11 @@ def match_goals(scores: list[float], roles: dict[str, list[int]],
 
 
 def assign_roles(projected: list[float]) -> dict[str, list[int]]:
+    """Top 2 -> Strikers, next -> GK (Strikers get priority since only
+    Strikers independently score goals -- see sklw_matchup.py's
+    assign_roles for the full reasoning, validated in backtest.py)."""
     ranked = sorted(range(16), key=lambda i: -projected[i])
-    return {"gk": ranked[0:1], "strikers": ranked[1:3], "squad": ranked[3:14], "bench": ranked[14:16]}
+    return {"strikers": ranked[0:2], "gk": ranked[2:3], "squad": ranked[3:14], "bench": ranked[14:16]}
 
 
 VALID_FORMATIONS = [(d, m, 10 - d - m) for d in range(3, 6) for m in range(2, 6)
