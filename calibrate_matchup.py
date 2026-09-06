@@ -173,12 +173,27 @@ def assign_roles(projected: list[float]) -> dict[str, list[int]]:
     return {"gk": ranked[0:1], "strikers": ranked[1:3], "squad": ranked[3:14], "bench": ranked[14:16]}
 
 
-def build_member(rng: random.Random, pool_ids: list[int], eligible: dict[int, dict],
-                  target_gw: int) -> dict:
-    """One synthetic club member = 11 real players. Returns per-player
-    xp/actual/position/team lists plus which index is captain (highest
-    xp, decision-time, not hindsight) and the totals (captain doubled)."""
-    ids = rng.sample(pool_ids, 11)
+VALID_FORMATIONS = [(d, m, 10 - d - m) for d in range(3, 6) for m in range(2, 6)
+                     if 1 <= 10 - d - m <= 3]
+
+
+def build_member(rng: random.Random, eligible_by_pos: dict[str, list[int]],
+                  eligible: dict[int, dict], target_gw: int) -> dict:
+    """One synthetic club member = 11 real players in a VALID FPL
+    formation (1 GK + a real DEF/MID/FWD split), drawn from real
+    position-specific pools -- not 11 players pulled uniformly from every
+    position mixed together (the earlier version). That matters for
+    testing the team-correlation model: a formation-realistic squad
+    naturally has some chance of clustering 2+ players from the same real
+    club (as real squads do, sometimes deliberately), which a fully mixed
+    random blob of 11 across all positions rarely does by chance -- so
+    THIS version is what actually gives the team-correlation fix a fair
+    test. Returns per-player xp/actual/position/team lists plus which
+    index is captain (highest xp, decision-time) and the totals (captain
+    doubled)."""
+    d, m, f = rng.choice(VALID_FORMATIONS)
+    ids = (rng.sample(eligible_by_pos["GK"], 1) + rng.sample(eligible_by_pos["DEF"], d)
+           + rng.sample(eligible_by_pos["MID"], m) + rng.sample(eligible_by_pos["FWD"], f))
     xps = [eligible[eid]["by_gw"][target_gw][1] for eid in ids]
     actuals = [eligible[eid]["by_gw"][target_gw][0] for eid in ids]
     positions = [eligible[eid]["position"] for eid in ids]
@@ -190,9 +205,9 @@ def build_member(rng: random.Random, pool_ids: list[int], eligible: dict[int, di
             "projected": projected, "actual": actual}
 
 
-def build_club(rng: random.Random, pool_ids: list[int], eligible: dict[int, dict],
-               target_gw: int) -> list[dict]:
-    return [build_member(rng, pool_ids, eligible, target_gw) for _ in range(16)]
+def build_club(rng: random.Random, eligible_by_pos: dict[str, list[int]],
+               eligible: dict[int, dict], target_gw: int) -> list[dict]:
+    return [build_member(rng, eligible_by_pos, eligible, target_gw) for _ in range(16)]
 
 
 def pick_team_shocks(rng: random.Random, teams_needed: set[str],
@@ -299,12 +314,17 @@ def main():
     for _ in range(args.trials):
         target_gw = rng.choice(target_gws)
         eligible = {eid: e for eid, e in history.items() if target_gw in e["by_gw"]}
-        pool_ids = list(eligible)
-        if len(pool_ids) < 22:
+        eligible_by_pos: dict[str, list[int]] = {p: [] for p in POSITIONS}
+        for eid, e in eligible.items():
+            eligible_by_pos[e["position"]].append(eid)
+        # Need at least enough distinct players per position for the
+        # widest valid formation (5 DEF, 5 MID, 3 FWD, 1 GK).
+        if (len(eligible_by_pos["GK"]) < 1 or len(eligible_by_pos["DEF"]) < 5
+                or len(eligible_by_pos["MID"]) < 5 or len(eligible_by_pos["FWD"]) < 3):
             continue
 
-        club1 = build_club(rng, pool_ids, eligible, target_gw)
-        club2 = build_club(rng, pool_ids, eligible, target_gw)
+        club1 = build_club(rng, eligible_by_pos, eligible, target_gw)
+        club2 = build_club(rng, eligible_by_pos, eligible, target_gw)
         roles1 = assign_roles([m["projected"] for m in club1])
         roles2 = assign_roles([m["projected"] for m in club2])
 

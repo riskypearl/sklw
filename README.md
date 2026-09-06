@@ -326,35 +326,45 @@ one purely to train the score-variance model, a DIFFERENT one to check
 predictions against, so there's no lookahead), and reports whether
 "predicted 70% to win" actually wins about 70% of the time in reality,
 plus an overall Brier score (0 = perfect, 0.25 = no better than a coin
-flip). Baseline result: **Brier 0.206** (a real but modest improvement
-over guessing), and the model is measurably **overconfident at the
-extremes** — a "95% to win" call only actually won about 84% of the
-time, a "5%" call actually won about 11% — while the 30-60% range was
-well calibrated. Treat "clearly favoured" as meaningful, but don't read
-the exact number too literally at the extreme ends.
+flip).
 
-Investigated the likely cause and it's more subtle than "players are
-independent": measuring real historical residuals directly shows a
-random pair of players anywhere in the league barely correlates (0.033),
-and opposing teams in the same match don't correlate at all (0.002) —
-but players on the SAME real team, same gameweek, correlate at 0.138
-(a team has a good or bad day together: shared clean sheet, shared
-goals, shared bonus points). `calibrate_matchup.py` has a team-scoped
-block-bootstrap mode built and tested to model exactly that (draw one
+First pass was **Brier 0.206** (a real but modest improvement over
+guessing) with the model measurably **overconfident at the extremes** —
+a "95% to win" call only actually won about 84% of the time, a "5%"
+call actually won about 11%, while 30-60% was well calibrated.
+Investigated why: measuring real historical residuals directly shows a
+random pair of players anywhere in the league barely correlates (0.033)
+and opposing teams in the same match don't correlate at all (0.002), but
+players on the SAME real team, same gameweek, correlate at 0.138 (a team
+has a good or bad day together — shared clean sheet, shared goals,
+shared bonus points) — so a team-scoped block-bootstrap (draw one
 historical team-gameweek per real club per simulated trial, so same-team
-players share it) — but running the SAME calibration check with it made
-essentially no difference (Brier 0.2059, same overconfident-tails
-pattern). Best guess why: the synthetic backtest's "member" is 11
-randomly drawn players with no formation constraints at all, so it
-rarely happens to cluster multiple players from the same real team the
-way an actual FPL squad (or a manager deliberately stacking 2-3
-defenders from a strong defense) would — diluting whatever benefit
-should show up. So the overconfidence is real and unresolved; the fix
-that seemed obvious from the data didn't hold up under an honest
-out-of-sample test, and chasing it further would need the synthetic
-backtest to build formation-realistic squads rather than random
-11-player blobs. Not implemented in `sklw_matchup.py` itself, since it
-adds real complexity for a benefit this test couldn't confirm.
+players share it) should help.
+
+First attempt at that showed **no improvement** (Brier 0.2059, same
+overconfident tails) — because the synthetic test squads were 11
+randomly drawn players with no formation constraints, so they rarely
+clustered same-team players the way a real FPL squad does, giving the
+fix nothing to grab onto. Fixed the test squads to draw a proper
+formation (1 GK + a real DEF/MID/FWD split, from real position pools)
+instead of a mixed blob, then re-ran the SAME comparison as a clean
+ablation:
+
+| squad model | correlation model | Brier |
+|---|---|---|
+| random 11-player blob | independent | 0.206 |
+| formation-realistic | independent | 0.214 (worse) |
+| formation-realistic | **team-scoped correlation** | **0.194 (best)** |
+
+The middle row confirms the formation fix alone isn't what helped — it's
+the team correlation specifically, and it only shows up once the test
+squads are realistic enough to expose it. **This is now live in
+`sklw_matchup.py`** (`build_team_gw_residuals`/`pick_team_shocks`) since
+real FPL squads are already formation-realistic by construction
+(`pick_best_eleven`), so this result transfers. Calibration is
+meaningfully better but still not perfect — treat "clearly favoured" as
+meaningful, exact numbers at the extremes with a bit more caution than
+the middle of the range.
 
 ## Known gaps / next steps
 

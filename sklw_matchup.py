@@ -221,11 +221,11 @@ def build_position_residuals(rows: list[dict]) -> dict[str, list[float]]:
     position, from the vaastav archive (same source and field backtest.py
     already validated) -- an empirical, data-grounded stand-in for 'how
     wrong does a point projection typically turn out to be for a player
-    in this position'. Used to Monte Carlo simulate a range of plausible
-    real outcomes around a CURRENT projection instead of trusting it as
-    exact -- attacking positions have far fatter tails (a MID/FWD can
-    blank OR haul; a DEF's ceiling is much more capped), so this must be
-    split by position rather than pooled."""
+    in this position'. Used as the FALLBACK when a player's real team has
+    no usable data for the chosen shock gameweek (see
+    build_team_gw_residuals) -- attacking positions have far fatter tails
+    (a MID/FWD can blank OR haul; a DEF's ceiling is much more capped),
+    so this must be split by position rather than pooled."""
     residuals: dict[str, list[float]] = {"GK": [], "DEF": [], "MID": [], "FWD": []}
     for row in rows:
         try:
@@ -237,6 +237,53 @@ def build_position_residuals(rows: list[dict]) -> dict[str, list[float]]:
         if pos in residuals:
             residuals[pos].append(actual - proj)
     return residuals
+
+
+def build_team_gw_residuals(rows: list[dict]) -> dict[tuple[str, int], dict[str, list[float]]]:
+    """Real historical (actual - xP), grouped by (real team, GW) AND
+    position -- e.g. Arsenal's GW14 defenders. Measured evidence (see
+    calibrate_matchup.py / README): same-team same-GW residuals correlate
+    at ~0.14 (a team has a good or bad day together -- shared clean
+    sheet, shared goals, shared bonus points), vs ~0.03 pooled across the
+    whole league that GW and ~0 between opposing teams in the same
+    fixture -- so TEAM is the unit that actually needs to be correlated.
+    Used for a team-scoped block bootstrap: for one simulated trial, draw
+    ONE historical (team, GW) per real team involved, and every player
+    from that team draws their residual from THAT SAME historical block.
+    Verified via calibrate_matchup.py's out-of-sample calibration check
+    to be a genuine improvement (not just a plausible-sounding idea) --
+    see the README for the ablation result."""
+    blocks: dict[tuple[str, int], dict[str, list[float]]] = {}
+    for row in rows:
+        try:
+            team = row["team"]
+            gw = int(row["GW"])
+            pos = row["position"]
+            actual = float(row["total_points"])
+            proj = float(row["xP"])
+        except (ValueError, KeyError):
+            continue
+        if pos not in ("GK", "DEF", "MID", "FWD"):
+            continue
+        key = (team, gw)
+        blocks.setdefault(key, {"GK": [], "DEF": [], "MID": [], "FWD": []})[pos].append(actual - proj)
+    return blocks
+
+
+def build_team_gw_index(blocks: dict[tuple[str, int], dict[str, list[float]]]) -> dict[str, list[int]]:
+    """team -> list of GWs that team has a block for."""
+    index: dict[str, list[int]] = {}
+    for team, gw in blocks:
+        index.setdefault(team, []).append(gw)
+    return index
+
+
+def pick_team_shocks(rng: random.Random, teams_needed: set[str],
+                      team_gw_index: dict[str, list[int]]) -> dict[str, int | None]:
+    """One random historical GW per real team, shared by every player
+    from that team within a single simulated trial."""
+    return {team: (rng.choice(team_gw_index[team]) if team_gw_index.get(team) else None)
+            for team in teams_needed}
 
 
 def resolve_roster(spec: str | None, file_path: str | None, label: str) -> dict[str, int]:
@@ -326,19 +373,30 @@ def match_goals(scores: dict[str, float], roles: dict[str, list[str]],
 
 
 def simulate_manager_score(rng: random.Random, info: dict, players: dict[int, dict],
-                            points: dict[int, float], residuals: dict[str, list[float]]) -> float:
+                            points: dict[int, float], team_names: dict[int, str],
+                            team_shocks: dict[str, int | None],
+                            team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
+                            fallback_residuals: dict[str, list[float]]) -> float:
     """One simulated real GW score for a manager: each starter's
-    projected mean plus a randomly resampled historical residual for
-    their position, captain doubled AFTER adding the residual (matches
-    how a real captain multiplier applies to whatever they actually
-    score, not to the pre-match projection)."""
+    projected mean plus a resampled historical residual for their
+    position, captain doubled AFTER adding the residual (matches how a
+    real captain multiplier applies to whatever they actually score, not
+    to the pre-match projection). The residual comes from that player's
+    real team's shared shock block for this trial where available
+    (team_shocks/team_gw_residuals -- see build_team_gw_residuals),
+    falling back to the plain pooled position distribution for a team
+    with no usable data that GW."""
     total = 0.0
     for pid in info["starters"]:
         el = players.get(pid)
         pos = POSITION_NAMES.get(el["element_type"], "MID") if el else "MID"
+        team = team_names.get(el["team"]) if el else None
+        shock_gw = team_shocks.get(team) if team else None
+        pool = team_gw_residuals.get((team, shock_gw), {}).get(pos) if shock_gw is not None else None
+        if not pool:
+            pool = fallback_residuals[pos]
         projected = points.get(pid, 0.0)
-        residual = rng.choice(residuals[pos])
-        score = projected + residual
+        score = projected + rng.choice(pool)
         if pid == info["captain"]:
             score *= 2
         total += score
@@ -347,15 +405,25 @@ def simulate_manager_score(rng: random.Random, info: dict, players: dict[int, di
 
 def run_simulation(rng: random.Random, us_club: dict[str, dict], us_roles: dict[str, list[str]],
                     them_club: dict[str, dict], them_roles: dict[str, list[str]],
-                    players: dict[int, dict], points: dict[int, float],
-                    residuals: dict[str, list[float]], sims: int) -> dict:
+                    players: dict[int, dict], points: dict[int, float], team_names: dict[int, str],
+                    team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
+                    team_gw_index: dict[str, list[int]],
+                    fallback_residuals: dict[str, list[float]], sims: int) -> dict:
+    all_starter_ids = [pid for info in list(us_club.values()) + list(them_club.values())
+                        for pid in info["starters"]]
+    teams_needed = {team_names[players[pid]["team"]] for pid in all_starter_ids
+                     if pid in players and players[pid]["team"] in team_names}
+
     wins = draws = losses = 0
     our_goals_total = their_goals_total = 0
     for _ in range(sims):
-        our_scores = {n: simulate_manager_score(rng, info, players, points, residuals)
+        team_shocks = pick_team_shocks(rng, teams_needed, team_gw_index)
+        our_scores = {n: simulate_manager_score(rng, info, players, points, team_names,
+                                                 team_shocks, team_gw_residuals, fallback_residuals)
                       for n, info in us_club.items()}
-        their_scores = {n: simulate_manager_score(rng, info, players, points, residuals)
-                        for n, info in them_club.items()}
+        their_scores = {n: simulate_manager_score(rng, info, players, points, team_names,
+                                                    team_shocks, team_gw_residuals, fallback_residuals)
+                         for n, info in them_club.items()}
         our_goals = match_goals(our_scores, us_roles, their_scores, them_roles)
         their_goals = match_goals(their_scores, them_roles, our_scores, us_roles)
         our_goals_total += our_goals
@@ -438,12 +506,15 @@ def main():
     last_finished_gw, next_gw = current_and_next_gw(bootstrap)
     print(f"Last finished GW: {last_finished_gw}, projecting for GW: {next_gw}")
 
-    print(f"Fetching {args.season} historical data to model score variance by position...")
+    print(f"Fetching {args.season} historical data to model score variance...")
     rows = fetch_season_rows(args.season)
-    residuals = build_position_residuals(rows)
-    for pos, vals in residuals.items():
+    fallback_residuals = build_position_residuals(rows)
+    for pos, vals in fallback_residuals.items():
         print(f"  {pos}: {len(vals)} historical samples, "
               f"stdev(actual - projected) = {statistics.pstdev(vals):.2f}")
+    team_gw_residuals = build_team_gw_residuals(rows)
+    team_gw_index = build_team_gw_index(team_gw_residuals)
+    team_names = {t["id"]: t["name"] for t in bootstrap["teams"]}
 
     print("\nFetching our club's picks...")
     us_club, us_failed = build_club_scores(us_roster, players, points, last_finished_gw, next_gw)
@@ -468,7 +539,8 @@ def main():
     rng = random.Random(args.seed)
     print(f"\nRunning {args.sims} simulated matchweeks...")
     result = run_simulation(rng, us_club, us_roles, them_club, them_roles,
-                             players, points, residuals, args.sims)
+                             players, points, team_names, team_gw_residuals,
+                             team_gw_index, fallback_residuals, args.sims)
 
     print(f"\n=== Result ===")
     print(f"Win:  {result['win_pct']:.1f}%")
