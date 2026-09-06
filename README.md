@@ -306,6 +306,16 @@ attackers are far more volatile than defenders, then Monte Carlo
 simulates several thousand matchweeks and reports what fraction your
 club wins.
 
+Once a manager's real picks for the target GW are actually confirmed
+(deadline passed), their REAL submitted starting-11 and REAL captain are
+used as-is, not guessed at — this matters a lot mid-gameweek, since a
+manager's real captain (including a real Triple Captain) might not be
+whoever the highest-projected player in their squad happens to be, and
+doubling the wrong player once their game's already partly or fully
+played would silently give a wrong real score. Before the deadline
+(only an older/fallback squad is available as a proxy), it still
+estimates via best-xi as before.
+
 ```
 python sklw_matchup.py --them-file opponent.json
 ```

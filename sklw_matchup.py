@@ -426,17 +426,33 @@ def resolve_bench_ids(spec: str | None, roster: dict[str, int], label: str) -> s
 def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: dict[int, float],
                        last_finished_gw: int, next_gw: int,
                        overrides: dict[str, dict]) -> tuple[dict[str, dict], list[str]]:
-    """Fetches each of the 16 managers' picks, applies any chip overrides
-    recorded via sklw_lineup.py's --wildcard/--transfer/--tc/--set-score
-    (same overrides.json, same format -- see sklw_lineup.py for the full
-    reasoning on each), computes their best-xi + captain (decision-time,
-    from current projections), and returns per-manager {'starters': [...],
-    'captain': id, 'projected': float} plus a list of any manager names
-    that failed to fetch (skipped). A 'manual_score' override skips
-    picks/points entirely -- starters is left empty and 'manual_score' is
-    set, which simulate_manager_score treats as a fixed, zero-variance
-    contribution (the manager told us the number directly, no guessing
-    needed)."""
+    """Fetches each of the 16 managers' picks and returns per-manager
+    {'starters': [...], 'captain': id, 'projected': float} plus a list of
+    any manager names that failed to fetch (skipped).
+
+    Whenever the manager's REAL picks for the target GW are actually
+    confirmed (gw_used == next_gw, deadline already passed) -- their
+    ACTUAL submitted starting-11 ('position' <= 11, chip-agnostic per
+    SKLW's own rule that Bench Boost still doesn't count the bench) and
+    ACTUAL real captain (the real 'is_captain' flag) are used AS-IS, not
+    guessed at via best-xi. This matters a lot once a real GW is
+    underway: a manager's real captain (including a real Triple Captain)
+    might not be whoever the highest-projected player in their squad
+    happens to be, and once their game has partly or fully played out
+    (see build_live_locked), doubling the WRONG player instead of their
+    real one would silently produce a wrong 'real score so far'. SKLW
+    nets Triple Captain down to exactly a normal x2 captain regardless
+    (see sklw_lineup.py) -- since this always applies a flat x2 to
+    whichever player was REALLY captained, that net effect falls out
+    automatically with no separate chip-specific adjustment needed.
+    overrides.json's --wildcard/--transfer/--tc/--set-score only apply
+    when real picks AREN'T available yet (an older/fallback squad is
+    being used as a pre-deadline planning proxy) -- once real, confirmed
+    picks exist, they're authoritative and an override recorded for
+    earlier planning purposes is stale, so it's ignored (same real-vs-
+    proxy split sklw_lineup.py's --mode final/preview already makes). A
+    'manual_score' override always short-circuits everything regardless
+    -- the manager told us the number directly, no guessing needed."""
     club: dict[str, dict] = {}
     failed: list[str] = []
     for name, mid in roster.items():
@@ -451,16 +467,21 @@ def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: 
         if picks_data is None:
             if "wildcard" in entry:
                 picks_data = {"picks": []}  # wildcard replaces the squad entirely, no base needed
+                gw_used = None
             else:
                 failed.append(name)
                 continue
 
-        if "wildcard" in entry:
-            picks_data = apply_wildcard(picks_data, entry["wildcard"])
-        elif entry.get("out") or entry.get("in"):
-            picks_data = apply_overrides(picks_data, entry)
+        if gw_used == next_gw:
+            starters = [p["element"] for p in picks_data["picks"] if p["position"] <= 11]
+            captain = next((p["element"] for p in picks_data["picks"] if p["is_captain"]), None)
+        else:
+            if "wildcard" in entry:
+                picks_data = apply_wildcard(picks_data, entry["wildcard"])
+            elif entry.get("out") or entry.get("in"):
+                picks_data = apply_overrides(picks_data, entry)
+            starters, captain = pick_best_eleven(picks_data, players, points, entry.get("tc_captain"))
 
-        starters, captain = pick_best_eleven(picks_data, players, points, entry.get("tc_captain"))
         if not starters:
             failed.append(name)
             continue
