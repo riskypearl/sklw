@@ -65,8 +65,9 @@ def fetch_season_rows(season: str) -> list[dict]:
 
 def build_position_residuals(rows: list[dict]) -> dict[str, list[float]]:
     """Identical to sklw_matchup.py's function of the same name -- real
-    historical (actual - xP) per position, used to resample plausible
-    outcomes around a projection."""
+    historical (actual - xP) per position, used as a FALLBACK when a
+    player's real team has no usable data for the chosen shock gameweek
+    (see build_team_gw_residuals)."""
     residuals: dict[str, list[float]] = {p: [] for p in POSITIONS}
     for row in rows:
         try:
@@ -80,11 +81,52 @@ def build_position_residuals(rows: list[dict]) -> dict[str, list[float]]:
     return residuals
 
 
+def build_team_gw_residuals(rows: list[dict]) -> dict[tuple[str, int], dict[str, list[float]]]:
+    """Real historical (actual - xP), grouped by (real team, GW) AND
+    position -- e.g. Arsenal's GW14 defenders. Measured evidence (see
+    module docstring / README): same-team same-GW residuals correlate at
+    ~0.14 (a team has a good or bad day together -- shared clean sheet,
+    shared goals, shared bonus points), vs ~0.03 pooled across the whole
+    league that GW and ~0 between opposing teams in the same fixture --
+    so TEAM is the unit that actually needs to be correlated, not 'the
+    whole gameweek' or 'the match'. Used for a team-scoped block
+    bootstrap: for one simulated trial, draw ONE historical (team, GW)
+    per real team involved, and every player from that team draws their
+    residual from THAT SAME historical block -- reproducing the real
+    correlation without needing to assume any particular distribution
+    shape for it."""
+    blocks: dict[tuple[str, int], dict[str, list[float]]] = {}
+    for row in rows:
+        try:
+            team = row["team"]
+            gw = int(row["GW"])
+            pos = row["position"]
+            actual = float(row["total_points"])
+            proj = float(row["xP"])
+        except (ValueError, KeyError):
+            continue
+        if pos not in POSITIONS:
+            continue
+        key = (team, gw)
+        blocks.setdefault(key, {p: [] for p in POSITIONS})[pos].append(actual - proj)
+    return blocks
+
+
+def build_team_gw_index(blocks: dict[tuple[str, int], dict[str, list[float]]]) -> dict[str, list[int]]:
+    """team -> list of GWs that team has a block for, so a random shock
+    GW can be drawn per team without hardcoding the season's GW range
+    (handles promoted/relegated clubs missing from one season cleanly)."""
+    index: dict[str, list[int]] = {}
+    for team, gw in blocks:
+        index.setdefault(team, []).append(gw)
+    return index
+
+
 def build_player_history(rows: list[dict], pool_size: int) -> dict[int, dict]:
     """Same as backtest.py's function of the same name: element_id ->
-    {'position': str, 'by_gw': {gw: (actual, xp)}}, restricted to the
-    lowest `pool_size` distinct element IDs (established/engaged-manager
-    proxy, same reasoning as backtest.py)."""
+    {'position': str, 'team': str, 'by_gw': {gw: (actual, xp)}},
+    restricted to the lowest `pool_size` distinct element IDs
+    (established/engaged-manager proxy, same reasoning as backtest.py)."""
     by_player: dict[int, dict] = {}
     for row in rows:
         try:
@@ -94,7 +136,7 @@ def build_player_history(rows: list[dict], pool_size: int) -> dict[int, dict]:
             xp = float(row["xP"])
         except (ValueError, KeyError):
             continue
-        entry = by_player.setdefault(eid, {"position": row["position"], "by_gw": {}})
+        entry = by_player.setdefault(eid, {"position": row["position"], "team": row["team"], "by_gw": {}})
         entry["by_gw"][gw] = (actual, xp)
 
     pool_ids = sorted(by_player)[:pool_size]
@@ -134,16 +176,17 @@ def assign_roles(projected: list[float]) -> dict[str, list[int]]:
 def build_member(rng: random.Random, pool_ids: list[int], eligible: dict[int, dict],
                   target_gw: int) -> dict:
     """One synthetic club member = 11 real players. Returns per-player
-    xp/actual/position lists plus which index is captain (highest xp,
-    decision-time, not hindsight) and the totals (captain doubled)."""
+    xp/actual/position/team lists plus which index is captain (highest
+    xp, decision-time, not hindsight) and the totals (captain doubled)."""
     ids = rng.sample(pool_ids, 11)
     xps = [eligible[eid]["by_gw"][target_gw][1] for eid in ids]
     actuals = [eligible[eid]["by_gw"][target_gw][0] for eid in ids]
     positions = [eligible[eid]["position"] for eid in ids]
+    teams = [eligible[eid]["team"] for eid in ids]
     captain_idx = max(range(11), key=lambda i: xps[i])
     projected = sum(xps) + xps[captain_idx]
     actual = sum(actuals) + actuals[captain_idx]
-    return {"xps": xps, "positions": positions, "captain_idx": captain_idx,
+    return {"xps": xps, "positions": positions, "teams": teams, "captain_idx": captain_idx,
             "projected": projected, "actual": actual}
 
 
@@ -152,10 +195,33 @@ def build_club(rng: random.Random, pool_ids: list[int], eligible: dict[int, dict
     return [build_member(rng, pool_ids, eligible, target_gw) for _ in range(16)]
 
 
-def simulate_member_score(rng: random.Random, member: dict, residuals: dict[str, list[float]]) -> float:
+def pick_team_shocks(rng: random.Random, teams_needed: set[str],
+                      team_gw_index: dict[str, list[int]]) -> dict[str, int | None]:
+    """One random historical GW per real team, shared by every player
+    from that team within a single simulated trial -- the mechanism that
+    reproduces the measured same-team correlation. None for a team with
+    no training-season data at all (e.g. promoted/relegated between
+    seasons) -- callers fall back to the pooled position distribution for
+    those players instead."""
+    shocks: dict[str, int | None] = {}
+    for team in teams_needed:
+        gws = team_gw_index.get(team)
+        shocks[team] = rng.choice(gws) if gws else None
+    return shocks
+
+
+def simulate_member_score(rng: random.Random, member: dict, team_shocks: dict[str, int | None],
+                           team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
+                           fallback_residuals: dict[str, list[float]]) -> float:
     total = 0.0
-    for i, (xp, pos) in enumerate(zip(member["xps"], member["positions"])):
-        score = xp + rng.choice(residuals[pos])
+    for i, (xp, pos, team) in enumerate(zip(member["xps"], member["positions"], member["teams"])):
+        shock_gw = team_shocks.get(team)
+        pool = None
+        if shock_gw is not None:
+            pool = team_gw_residuals.get((team, shock_gw), {}).get(pos)
+        if not pool:  # team unknown this season, or no player at this position that GW
+            pool = fallback_residuals[pos]
+        score = xp + rng.choice(pool)
         if i == member["captain_idx"]:
             score *= 2
         total += score
@@ -164,11 +230,17 @@ def simulate_member_score(rng: random.Random, member: dict, residuals: dict[str,
 
 def predicted_win_probability(rng: random.Random, club1: list[dict], roles1: dict,
                                club2: list[dict], roles2: dict,
-                               residuals: dict[str, list[float]], inner_sims: int) -> float:
+                               team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
+                               team_gw_index: dict[str, list[int]],
+                               fallback_residuals: dict[str, list[float]], inner_sims: int) -> float:
+    teams_needed = {t for m in club1 + club2 for t in m["teams"]}
     wins = 0
     for _ in range(inner_sims):
-        scores1 = [simulate_member_score(rng, m, residuals) for m in club1]
-        scores2 = [simulate_member_score(rng, m, residuals) for m in club2]
+        team_shocks = pick_team_shocks(rng, teams_needed, team_gw_index)
+        scores1 = [simulate_member_score(rng, m, team_shocks, team_gw_residuals, fallback_residuals)
+                   for m in club1]
+        scores2 = [simulate_member_score(rng, m, team_shocks, team_gw_residuals, fallback_residuals)
+                   for m in club2]
         g1 = match_goals(scores1, roles1, scores2, roles2)
         g2 = match_goals(scores2, roles2, scores1, roles1)
         if g1 > g2:
@@ -206,10 +278,14 @@ def main():
 
     print(f"Fetching {args.train_season} (training) data for the variance model...")
     train_rows = fetch_season_rows(args.train_season)
-    residuals = build_position_residuals(train_rows)
+    fallback_residuals = build_position_residuals(train_rows)
     for pos in POSITIONS:
-        print(f"  {pos}: {len(residuals[pos])} samples, "
-              f"stdev(actual - xP) = {statistics.pstdev(residuals[pos]):.2f}")
+        print(f"  {pos}: {len(fallback_residuals[pos])} samples, "
+              f"stdev(actual - xP) = {statistics.pstdev(fallback_residuals[pos]):.2f}")
+    team_gw_residuals = build_team_gw_residuals(train_rows)
+    team_gw_index = build_team_gw_index(team_gw_residuals)
+    print(f"  {len(team_gw_index)} real teams, {len(team_gw_residuals)} (team, GW) blocks "
+          f"for the team-scoped correlation model")
 
     print(f"\nFetching {args.test_season} (test) data for real outcomes...")
     test_rows = fetch_season_rows(args.test_season)
@@ -232,7 +308,9 @@ def main():
         roles1 = assign_roles([m["projected"] for m in club1])
         roles2 = assign_roles([m["projected"] for m in club2])
 
-        pred = predicted_win_probability(rng, club1, roles1, club2, roles2, residuals, args.inner_sims)
+        pred = predicted_win_probability(rng, club1, roles1, club2, roles2,
+                                          team_gw_residuals, team_gw_index,
+                                          fallback_residuals, args.inner_sims)
         g1, g2 = real_outcome(club1, roles1, club2, roles2)
         records.append((pred, g1 > g2, g1 == g2))
 
