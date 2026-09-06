@@ -121,11 +121,22 @@ def fetch_fixture_status(gw: int) -> dict[int, str]:
     """real team_id -> 'not_started' | 'in_progress' | 'finished' for
     gameweek `gw`. A team with no fixture that GW (blank gameweek)
     simply has no entry -- callers should default a missing key to
-    'not_started'."""
+    'not_started'.
+
+    Treats 'finished_provisional' as 'finished' -- FPL's real 'finished'
+    flag doesn't flip true until bonus points are OFFICIALLY locked in,
+    which can lag hours behind the match actually ending (confirmed via
+    a real fixtures response: a match at minute 90 showed
+    finished_provisional=true but finished=false). Waiting for the
+    strict flag meant nothing was ever treated as genuinely over, which
+    silently broke automatic-substitution prediction entirely (it
+    requires a CONFIRMED finished fixture to treat a 0-minute player as
+    a real blank rather than 'hasn't played yet') -- 'finished' still
+    wins if somehow set without provisional having been set first."""
     fixtures = get_json(f"{FPL_BASE}/fixtures/?event={gw}")
     status: dict[int, str] = {}
     for f in fixtures:
-        if f.get("finished"):
+        if f.get("finished") or f.get("finished_provisional"):
             s = "finished"
         elif f.get("started"):
             s = "in_progress"

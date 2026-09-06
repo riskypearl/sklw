@@ -346,6 +346,17 @@ anyway. `sklw_lineup.py`'s scoring keeps the simpler `position`/
 `is_captain` check (it doesn't yet have full auto-sub prediction) — a
 known gap there for a future pass if it turns out to matter in practice.
 
+A fixture is only treated as "confirmed over" (needed before a 0-minute
+player counts as a real blank) once its `finished_provisional` flag is
+true — NOT the stricter `finished` flag, which doesn't flip true until
+bonus points are officially locked in, often hours after a match
+actually ends. Waiting on the strict flag silently meant no
+substitution was ever predicted at all, confirmed against a real
+mismatch (the tool showed 43 for a manager whose real score was 47 —
+a blanked player never got swapped for their real bench replacement,
+who'd already played and scored). Fixed and reproduced the real 47
+exactly using that manager's actual real picks and live data.
+
 ```
 python sklw_matchup.py --them-file opponent.json
 ```
