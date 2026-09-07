@@ -1,0 +1,230 @@
+"""Regression tests for SKLW's core scoring rules.
+
+This project deliberately duplicates small scoring helpers across
+sklw_lineup.py / sklw_matchup.py / calibrate_matchup.py / backtest.py
+(standalone-file convention -- no shared imports between the tools
+themselves). That's a real drift risk: a fix applied to one copy can
+silently fail to reach the others. These tests import all four files
+directly (test-only, doesn't affect how the tools ship or run) and check
+every copy against the same rules, so a future edit that breaks one
+without the others gets caught here rather than by another 4-real-match
+debugging session.
+
+Locks in the two bugs that took real SKLW match results to find:
+  - The GK does NOT independently score goals of its own (it's purely a
+    defensive target for the opponent's Strikers -- see README).
+  - Squad goals use a base-plus-bonus formula (1 goal just for winning
+    the squad battle, +1 more per full 30-point margin beyond that), not
+    a "bonus only" formula.
+And the validated role-assignment priority: GK gets first pick (top
+projected score), Strikers get the next 2 -- not the other way around
+(see backtest.py's net-goal-differential comparison in the README).
+
+Run: python3 -m unittest test_scoring.py -v
+"""
+import io
+import unittest
+from contextlib import redirect_stdout
+
+import backtest
+import calibrate_matchup
+import sklw_lineup
+import sklw_matchup
+
+
+class H2HGoalsTests(unittest.TestCase):
+    """1 goal per full 20-point margin, 0 if the defender ties/wins.
+    Same rule, three copies -- backtest.py, calibrate_matchup.py,
+    sklw_matchup.py."""
+
+    MODULES = (backtest, calibrate_matchup, sklw_matchup)
+
+    def test_tie_is_zero(self):
+        for mod in self.MODULES:
+            self.assertEqual(mod.h2h_goals(50, 50), 0, mod.__name__)
+
+    def test_defender_wins_is_zero(self):
+        for mod in self.MODULES:
+            self.assertEqual(mod.h2h_goals(30, 50), 0, mod.__name__)
+
+    def test_margin_1_to_19_is_one_goal(self):
+        for mod in self.MODULES:
+            self.assertEqual(mod.h2h_goals(51, 50), 1, mod.__name__)
+            self.assertEqual(mod.h2h_goals(69, 50), 1, mod.__name__)
+
+    def test_margin_20_to_39_is_two_goals(self):
+        for mod in self.MODULES:
+            self.assertEqual(mod.h2h_goals(70, 50), 2, mod.__name__)
+            self.assertEqual(mod.h2h_goals(89, 50), 2, mod.__name__)
+
+    def test_margin_40_to_59_is_three_goals(self):
+        for mod in self.MODULES:
+            self.assertEqual(mod.h2h_goals(90, 50), 3, mod.__name__)
+
+
+class SquadGoalsTests(unittest.TestCase):
+    """1 goal for winning the squad battle at all, +1 more per full
+    30-point margin beyond that. Same rule, three copies."""
+
+    MODULES = (backtest, calibrate_matchup, sklw_matchup)
+
+    def test_tie_is_zero(self):
+        for mod in self.MODULES:
+            self.assertEqual(mod.squad_goals(500, 500), 0, mod.__name__)
+
+    def test_loser_is_zero(self):
+        for mod in self.MODULES:
+            self.assertEqual(mod.squad_goals(490, 500), 0, mod.__name__)
+
+    def test_margin_1_to_29_is_one_goal(self):
+        for mod in self.MODULES:
+            self.assertEqual(mod.squad_goals(501, 500), 1, mod.__name__)
+            self.assertEqual(mod.squad_goals(529, 500), 1, mod.__name__)
+
+    def test_margin_30_to_59_is_two_goals(self):
+        for mod in self.MODULES:
+            self.assertEqual(mod.squad_goals(530, 500), 2, mod.__name__)
+            self.assertEqual(mod.squad_goals(559, 500), 2, mod.__name__)
+
+
+class GKDoesNotIndependentlyScoreTests(unittest.TestCase):
+    """The bug that took 4 real SKLW match results to find and fix: an
+    earlier version of match_goals gave the GK a mirrored H2H mechanic
+    against the opponent's Strikers, on top of the Strikers' own H2H
+    battle. Construct a case where the GK's own score is enormous but
+    every Striker on both sides blanks -- if match_goals ever returns a
+    nonzero goal from that, the bug is back."""
+
+    def test_backtest_match_goals(self):
+        club = [{"actual": 0.0} for _ in range(16)]
+        club[0]["actual"] = 1000.0  # "GK" -- must NOT independently score
+        opp = [{"actual": 0.0} for _ in range(16)]
+        roles = {"strikers": [1, 2], "gk": [0], "squad": list(range(3, 14)), "bench": [14, 15]}
+        opp_roles = {"strikers": [1, 2], "gk": [0], "squad": list(range(3, 14)), "bench": [14, 15]}
+        self.assertEqual(backtest.match_goals(club, roles, opp, opp_roles), 0)
+
+    def test_calibrate_matchup_match_goals(self):
+        scores = [0.0] * 16
+        scores[0] = 1000.0
+        opp_scores = [0.0] * 16
+        roles = {"strikers": [1, 2], "gk": [0], "squad": list(range(3, 14)), "bench": [14, 15]}
+        opp_roles = {"strikers": [1, 2], "gk": [0], "squad": list(range(3, 14)), "bench": [14, 15]}
+        self.assertEqual(calibrate_matchup.match_goals(scores, roles, opp_scores, opp_roles), 0)
+
+    def test_sklw_matchup_match_goals_breakdown_has_no_gk_key(self):
+        names = [f"m{i}" for i in range(16)]
+        scores = {n: 0.0 for n in names}
+        scores["m0"] = 1000.0  # "GK" -- must NOT independently score
+        opp_names = [f"o{i}" for i in range(16)]
+        opp_scores = {n: 0.0 for n in opp_names}
+        roles = {"strikers": ["m1", "m2"], "gk": ["m0"], "squad": names[3:14], "bench": names[14:16]}
+        opp_roles = {"strikers": ["o1", "o2"], "gk": ["o0"], "squad": opp_names[3:14], "bench": opp_names[14:16]}
+        breakdown = sklw_matchup.match_goals_breakdown(scores, roles, opp_scores, opp_roles)
+        self.assertNotIn("gk", breakdown)
+        self.assertEqual(set(breakdown), {"strikers", "squad"})
+        self.assertEqual(sum(breakdown.values()), 0)
+        self.assertEqual(sklw_matchup.match_goals(scores, roles, opp_scores, opp_roles), 0)
+
+    def test_our_gk_score_still_helps_defensively_via_their_side(self):
+        """A high GK score doesn't score FOR us, but it should still deny
+        the OPPONENT's Strikers when THEIR goals are computed against
+        our GK -- that's the GK's real (defensive-only) value."""
+        names = [f"m{i}" for i in range(16)]
+        scores = {n: 0.0 for n in names}
+        scores["m0"] = 1000.0  # our GK
+        opp_names = [f"o{i}" for i in range(16)]
+        opp_scores = {n: 50.0 for n in opp_names}  # opponent Strikers score 50
+        roles = {"strikers": ["m1", "m2"], "gk": ["m0"], "squad": names[3:14], "bench": names[14:16]}
+        opp_roles = {"strikers": ["o1", "o2"], "gk": ["o0"], "squad": opp_names[3:14], "bench": opp_names[14:16]}
+        # Opponent's goals FOR them = their Strikers (50 each) vs OUR GK (1000) -> denied.
+        opp_breakdown = sklw_matchup.match_goals_breakdown(opp_scores, opp_roles, scores, roles)
+        self.assertEqual(opp_breakdown["strikers"], 0)
+
+
+class RoleAssignmentPriorityTests(unittest.TestCase):
+    """Validated in backtest.py via net goal differential: GK gets first
+    pick (denies 2 opposing H2H battles at once), Strikers get the next
+    2. This was flipped and flipped back once already this project --
+    lock in the direction so it can't silently flip again."""
+
+    def test_calibrate_matchup_assign_roles(self):
+        projected = list(range(16))  # index 15 is highest
+        roles = calibrate_matchup.assign_roles(projected)
+        self.assertEqual(roles["gk"], [15])
+        self.assertEqual(sorted(roles["strikers"]), [13, 14])
+        self.assertEqual(len(roles["squad"]), 11)
+        self.assertEqual(len(roles["bench"]), 2)
+        all_assigned = roles["gk"] + roles["strikers"] + roles["squad"] + roles["bench"]
+        self.assertEqual(sorted(all_assigned), list(range(16)))
+
+    def test_sklw_matchup_assign_roles(self):
+        club = {f"m{i}": {"projected": float(i)} for i in range(16)}
+        roles = sklw_matchup.assign_roles(club)
+        self.assertEqual(roles["gk"], ["m15"])
+        self.assertEqual(sorted(roles["strikers"]), ["m13", "m14"])
+        self.assertEqual(len(roles["squad"]), 11)
+        self.assertEqual(len(roles["bench"]), 2)
+        all_assigned = roles["gk"] + roles["strikers"] + roles["squad"] + roles["bench"]
+        self.assertEqual(sorted(all_assigned), sorted(club))
+
+    def test_strikers_and_gk_excluded_from_squad(self):
+        """The Squad battle is 11 DISTINCT members -- neither the GK nor
+        either Striker also counts toward the Squad total."""
+        club = {f"m{i}": {"projected": float(i)} for i in range(16)}
+        roles = sklw_matchup.assign_roles(club)
+        self.assertFalse(set(roles["gk"]) & set(roles["squad"]))
+        self.assertFalse(set(roles["strikers"]) & set(roles["squad"]))
+        self.assertFalse(set(roles["gk"]) & set(roles["strikers"]))
+
+
+def _run_suggest_lineup(scores, fh_names=None):
+    """suggest_lineup only prints -- capture stdout and pull out which
+    names landed under each section header, in order."""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        sklw_lineup.suggest_lineup(scores, fh_names)
+    sections: dict[str, list[str]] = {}
+    current = None
+    for line in buf.getvalue().splitlines():
+        header = line.strip().rstrip(":")
+        if header in ("Strikers", "Goalkeeper", "Squad", "Bench"):
+            current = header
+            sections[current] = []
+        elif current and line.startswith("  ") and ":" in line and not line.strip().startswith("-->"):
+            sections[current].append(line.strip().split(":")[0])
+    return sections
+
+
+class SuggestLineupPriorityTests(unittest.TestCase):
+    """sklw_lineup.py's own copy of the GK-first/Strikers-next priority,
+    plus the Free Hit override ordering (also GK-first)."""
+
+    def setUp(self):
+        self.scores = [(f"m{i}", float(15 - i)) for i in range(16)]  # m0 highest
+
+    def test_no_fh_gk_gets_top_pick(self):
+        sections = _run_suggest_lineup(self.scores)
+        self.assertEqual(sections["Goalkeeper"], ["m0"])
+        self.assertEqual(sections["Strikers"], ["m1", "m2"])
+        self.assertEqual(len(sections["Squad"]), 11)
+        self.assertEqual(len(sections["Bench"]), 2)
+
+    def test_one_fh_manager_forced_into_gk(self):
+        sections = _run_suggest_lineup(self.scores, fh_names={"m10"})
+        self.assertEqual(sections["Goalkeeper"], ["m10"])
+        self.assertEqual(sections["Strikers"], ["m0", "m1"])
+
+    def test_three_fh_managers_gk_then_both_strikers(self):
+        sections = _run_suggest_lineup(self.scores, fh_names={"m10", "m11", "m12"})
+        self.assertEqual(sections["Goalkeeper"], ["m10"])
+        self.assertEqual(sorted(sections["Strikers"]), ["m11", "m12"])
+
+    def test_fourth_fh_manager_falls_back_to_normal_pool(self):
+        sections = _run_suggest_lineup(self.scores, fh_names={"m10", "m11", "m12", "m13"})
+        self.assertEqual(sections["Goalkeeper"], ["m10"])
+        self.assertEqual(sorted(sections["Strikers"]), ["m11", "m12"])
+        self.assertIn("m13", sections["Squad"])  # 4th FH manager, no role room left
+
+
+if __name__ == "__main__":
+    unittest.main()

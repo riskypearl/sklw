@@ -289,6 +289,21 @@ pip install -r requirements.txt
 python sklw_lineup.py --mode final
 ```
 
+## Tests
+
+`test_scoring.py` locks in the core scoring rules (stdlib `unittest`, no
+extra dependency, no network calls) — run `python3 -m unittest
+test_scoring.py -v`. This project deliberately duplicates small scoring
+helpers across `sklw_lineup.py`/`sklw_matchup.py`/`calibrate_matchup.py`/
+`backtest.py` rather than sharing code between them, which is a real
+drift risk: a fix applied to one copy can silently fail to reach the
+others. These tests import all four files and check every copy against
+the same rules, and specifically pin down the two bugs that previously
+took real match results to catch — the GK not independently scoring
+goals, and the base-plus-bonus Squad formula — plus the validated
+GK-gets-first-pick role-assignment priority, so a future edit can't
+quietly reintroduce either without a test failing first.
+
 ## The 16 club members (name → FPL manager/entry ID)
 
 ```
