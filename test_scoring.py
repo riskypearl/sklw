@@ -177,12 +177,12 @@ class RoleAssignmentPriorityTests(unittest.TestCase):
         self.assertFalse(set(roles["gk"]) & set(roles["strikers"]))
 
 
-def _run_suggest_lineup(scores, fh_names=None):
+def _run_suggest_lineup(scores, fh_names=None, ceiling=None, k=0.5):
     """suggest_lineup only prints -- capture stdout and pull out which
     names landed under each section header, in order."""
     buf = io.StringIO()
     with redirect_stdout(buf):
-        sklw_lineup.suggest_lineup(scores, fh_names)
+        sklw_lineup.suggest_lineup(scores, fh_names, ceiling, k)
     sections: dict[str, list[str]] = {}
     current = None
     for line in buf.getvalue().splitlines():
@@ -224,6 +224,45 @@ class SuggestLineupPriorityTests(unittest.TestCase):
         self.assertEqual(sections["Goalkeeper"], ["m10"])
         self.assertEqual(sorted(sections["Strikers"]), ["m11", "m12"])
         self.assertIn("m13", sections["Squad"])  # 4th FH manager, no role room left
+
+
+class CeilingWeightingTests(unittest.TestCase):
+    """backtest.py found mean + k*std beats plain mean for GK/Strikers
+    selection at every k tested, unconditionally (SKLW's own goal
+    formula is convex: capped downside, unbounded stepped upside, so
+    variance raises expected goals regardless of favourite/underdog
+    status). Locks in that a high-ceiling manager can outrank a
+    higher-mean/zero-variance one for GK when k > 0, and that k=0 (or no
+    ceiling map) falls back to plain top-3-by-mean exactly."""
+
+    def setUp(self):
+        self.scores = [(f"m{i}", 100.0 - i) for i in range(16)]  # m0 highest mean
+        self.ceiling = {f"m{i}": 0.0 for i in range(16)}
+        self.ceiling["m1"] = 50.0  # huge stdev, 2nd-highest mean
+
+    def test_k_zero_is_plain_top3_by_mean(self):
+        sections = _run_suggest_lineup(self.scores, ceiling=self.ceiling, k=0.0)
+        self.assertEqual(sections["Goalkeeper"], ["m0"])
+        self.assertEqual(sections["Strikers"], ["m1", "m2"])
+
+    def test_no_ceiling_map_is_plain_top3_by_mean(self):
+        sections = _run_suggest_lineup(self.scores, k=0.5)  # ceiling=None
+        self.assertEqual(sections["Goalkeeper"], ["m0"])
+        self.assertEqual(sections["Strikers"], ["m1", "m2"])
+
+    def test_high_ceiling_can_outrank_higher_mean_for_gk(self):
+        sections = _run_suggest_lineup(self.scores, ceiling=self.ceiling, k=0.5)
+        self.assertEqual(sections["Goalkeeper"], ["m1"])
+        self.assertEqual(sorted(sections["Strikers"]), ["m0", "m2"])
+
+    def test_squad_selection_always_uses_plain_score(self):
+        """Squad/Bench boundary must stay plain-score-ordered even when
+        ceiling-weighting reorders who's in the GK/Strikers pool --
+        backtest.py found ceiling-weighting dilutes/doesn't help once
+        pooled into the Squad sum."""
+        sections = _run_suggest_lineup(self.scores, ceiling=self.ceiling, k=0.5)
+        self.assertEqual(sections["Squad"], [f"m{i}" for i in range(3, 14)])
+        self.assertEqual(sections["Bench"], ["m14", "m15"])
 
 
 if __name__ == "__main__":

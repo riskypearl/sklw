@@ -42,6 +42,7 @@ import argparse
 import csv
 import difflib
 import json
+import statistics
 import sys
 import unicodedata
 from pathlib import Path
@@ -129,6 +130,29 @@ def get_manager_picks(manager_id: int, gw: int) -> dict | None:
         return get_json(f"{FPL_BASE}/entry/{manager_id}/event/{gw}/picks/")
     except requests.HTTPError:
         return None
+
+
+def fetch_manager_ceiling(manager_id: int) -> float:
+    """Stdev of this real manager's own week-to-week total GW score this
+    season, via FPL's public entry-history endpoint -- how streaky/
+    inconsistent THIS SPECIFIC manager personally tends to be, not a
+    synthetic per-player figure. Used to ceiling-weight GK/Strikers
+    selection: backtest.py found mean + k*std beats plain mean at every
+    k tested, UNCONDITIONALLY -- not just when the club's an underdog.
+    That's because SKLW's own goal formula is convex (downside capped
+    at 0 goals, upside an unbounded stepped ladder), so higher variance
+    raises EXPECTED goals regardless of favourite/underdog status; see
+    the README's strategy section. Returns 0.0 (no ceiling boost) if the
+    manager has fewer than 2 GWs of history yet (new team) or the
+    request fails."""
+    try:
+        data = get_json(f"{FPL_BASE}/entry/{manager_id}/history/")
+    except requests.HTTPError:
+        return 0.0
+    history = [gw["points"] for gw in data.get("current", [])]
+    if len(history) < 2:
+        return 0.0
+    return statistics.pstdev(history)
 
 
 def ep_next_points(players: dict[int, dict]) -> dict[int, float]:
@@ -916,7 +940,8 @@ def explain_manager(picks_data: dict, gw_used: int, players: dict[int, dict],
     print(f"\nComputed score: {score}")
 
 
-def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = None) -> None:
+def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = None,
+                    ceiling: dict[str, float] | None = None, k: float = 0.5) -> None:
     """scores: [(manager_name, projected_score), ...]. Prints a suggested
     SKLW role assignment -- top scorer to GK, next 2 to Strikers, rest
     fill the 11-a-side squad, bottom 2 benched.
@@ -933,25 +958,43 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
     misses the GK's whole defensive contribution by construction):
     best-to-GK beats top-2-to-Strikers/3rd-to-GK decisively (avg net
     diff +0.206 vs -0.005, 34.5% vs 20.8% head-to-head at plain-mean
-    ranking), and mild ceiling/variance-weighting of the top-3 pool
-    (mean + 0.5*stdev) does slightly better still (+0.218) -- not wired
-    in here since it needs a recent-scores history this tool doesn't
-    track, but plain top-3 by projected mean is already the validated
-    default.
+    ranking).
+
+    ceiling/k: the GK/Strikers pool (top 3 candidates) is picked by
+    `score + k * ceiling[name]` instead of plain score when a ceiling
+    map is given -- backtest.py found mean + 0.5*stdev beats plain mean
+    at EVERY k tested, unconditionally (not just when the club's an
+    underdog): SKLW's own goal formula is convex (downside capped at 0,
+    upside an unbounded stepped ladder), so higher variance raises
+    EXPECTED goals in the individual-role H2H slots regardless of
+    favourite/underdog status -- see the README's strategy section.
+    ceiling[name] = stdev of that manager's own real week-to-week GW
+    score history (fetch_manager_ceiling); a manager missing from
+    `ceiling` gets 0.0 (no boost, falls back to plain score for them).
+    Pass ceiling=None (or k=0) for the pre-ceiling-weighting default of
+    plain top-3-by-mean. Squad/Bench selection ALWAYS uses plain score
+    -- ceiling-weighting only helps the individual-role H2H slots;
+    backtest.py found it dilutes/doesn't help once pooled into the
+    Squad sum.
 
     fh_names: managers on Free Hit this GW are prioritized into the
-    scoring roles, in order: GK first, then both Striker slots. FH gets
-    no chip score adjustment so it counts at full value, and GK is the
-    scarcer/more valuable individual-role slot (see above), so the
-    highest-scoring FH manager goes there first. Beyond GK + both
-    Striker slots there's no more individual-role room, so any further
-    FH managers fall back into the normal pool with no special
-    treatment."""
+    scoring roles, in order: GK first, then both Striker slots (ceiling-
+    weighting doesn't apply to them -- a chip forces them in regardless
+    of any ranking). FH gets no chip score adjustment so it counts at
+    full value, and GK is the scarcer/more valuable individual-role slot
+    (see above), so the highest-scoring FH manager goes there first.
+    Beyond GK + both Striker slots there's no more individual-role room,
+    so any further FH managers fall back into the normal pool (still
+    ceiling-weighted for the boundary, if any Striker slots remain)."""
     fh_names = fh_names or set()
+    ceiling = ceiling or {}
     ranked = sorted(scores, key=lambda x: -x[1])
     if len(ranked) < 15:
         print(f"WARNING: only {len(ranked)} managers with data (need 15) -- "
               f"suggestion below is incomplete.")
+
+    def by_ceiling(pool: list[tuple[str, float]]) -> list[tuple[str, float]]:
+        return sorted(pool, key=lambda ns: -(ns[1] + k * ceiling.get(ns[0], 0.0)))
 
     fh_present = sorted((ns for ns in ranked if ns[0] in fh_names), key=lambda x: -x[1])
     fh_gk = fh_present[0:1]
@@ -974,15 +1017,20 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
         pool = [ns for ns in ranked if ns[0] not in assigned]
         remaining_striker_slots = 2 - len(fh_strikers)
         gk = fh_gk
-        strikers = fh_strikers + pool[0:remaining_striker_slots]
-        idx = remaining_striker_slots
-        squad = pool[idx:idx + 11]
-        bench = pool[idx + 11:idx + 13]
+        extra_strikers = by_ceiling(pool)[0:remaining_striker_slots]
+        strikers = fh_strikers + extra_strikers
+        assigned_extra = {n for n, _ in extra_strikers}
+        remaining = [ns for ns in pool if ns[0] not in assigned_extra]  # still plain-score ordered
+        squad = remaining[0:11]
+        bench = remaining[11:13]
     else:
-        gk = ranked[0:1]
-        strikers = ranked[1:3]
-        squad = ranked[3:14]
-        bench = ranked[14:16]
+        top3 = by_ceiling(ranked)[0:3]
+        gk = top3[0:1]
+        strikers = top3[1:3]
+        assigned = {n for n, _ in top3}
+        remaining = [ns for ns in ranked if ns[0] not in assigned]  # still plain-score ordered
+        squad = remaining[0:11]
+        bench = remaining[11:13]
 
     print("\n=== Suggested SKLW lineup ===")
     print("\nStrikers:")
@@ -990,13 +1038,13 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
         if name in fh_striker_names:
             print(f"  {name}: FH")
         else:
-            print(f"  {name}: {sc}")
+            print(f"  {name}: {sc} (ceiling {ceiling.get(name, 0.0):.2f})")
     print("\nGoalkeeper:")
     for name, sc in gk:
         if fh_gk and name == fh_gk[0][0]:
             print(f"  {name}: FH")
         else:
-            print(f"  {name}: {sc}")
+            print(f"  {name}: {sc} (ceiling {ceiling.get(name, 0.0):.2f})")
     print("\nSquad:")
     for name, sc in squad:
         print(f"  {name}: {sc}")
@@ -1113,6 +1161,23 @@ def main():
                           "3-5 DEF, 2-5 MID, 1-3 FWD) picked from their real "
                           "15-man squad. Not the authoritative actual-picks "
                           "score -- chip adjustments aren't applied.")
+    ap.add_argument("--ceiling-weight", type=float, default=0.5, metavar="K",
+                     help="ceiling-weight the GK/Strikers pick: rank the "
+                          "top-3 pool by (projected score + K * stdev of "
+                          "that manager's own real week-to-week GW score "
+                          "history) instead of plain projected score. "
+                          "Validated in backtest.py: mean + 0.5*stdev beats "
+                          "plain mean at every K tested, UNCONDITIONALLY -- "
+                          "not just when the club's an underdog, because "
+                          "SKLW's own goal formula is convex (downside "
+                          "capped at 0, upside an unbounded stepped "
+                          "ladder), so higher variance raises EXPECTED "
+                          "goals regardless of favourite/underdog status. "
+                          "Default 0.5 (the backtested value). Pass 0 to "
+                          "disable and fall back to plain top-3-by-mean "
+                          "(also skips fetching score history, faster). "
+                          "Squad/Bench selection is never affected -- only "
+                          "the individual-role H2H slots.")
     ap.add_argument("--effective-ownership", action="store_true",
                      help="print each real player's Effective Ownership "
                           "(EO) across the club's 16 managers instead of "
@@ -1474,6 +1539,13 @@ def main():
             explain_manager(picks_data, gw_used, players, points)
         return
 
+    ceiling: dict[str, float] = {}
+    if args.ceiling_weight != 0:
+        print(f"Fetching each manager's own score history for ceiling-weighting "
+              f"(k={args.ceiling_weight})...")
+        for name, mid in MANAGER_IDS.items():
+            ceiling[name] = fetch_manager_ceiling(mid)
+
     scores: list[tuple[str, float]] = []
     for name, mid in MANAGER_IDS.items():
         if args.mode == "preview" and str(mid) in overrides and "manual_score" in overrides[str(mid)]:
@@ -1519,7 +1591,7 @@ def main():
         print(f"  {name} (GW{gw_used} squad, {tag}): projected {score}")
         scores.append((name, score))
 
-    suggest_lineup(scores, fh_names)
+    suggest_lineup(scores, fh_names, ceiling, args.ceiling_weight)
 
 
 if __name__ == "__main__":

@@ -92,10 +92,37 @@ metric, which is what the flip was originally based on, misses the GK's
 defensive contribution entirely by construction) and confirmed
 best-to-GK is correct: +0.206 avg net goal diff vs -0.005 for the
 flipped order, winning head-to-head 34.5% to 20.8% at plain-mean
-ranking. Mild ceiling/variance-weighting of the top-3 pool (mean +
-0.5×stdev of recent scores) nudges that up further to +0.218, but isn't
-wired in here since it needs a recent-scores history this tool doesn't
-track — plain top-3 by projected mean is the validated default.
+ranking.
+
+**`--ceiling-weight K` (default 0.5)** ranks the top-3 GK/Strikers pool
+by `projected score + K × stdev of that manager's own real week-to-week
+GW score history` instead of plain projected score — `backtest.py`
+found mean + 0.5×stdev beats plain mean at every K tested,
+**unconditionally**, not just when the club's an underdog: SKLW's own
+goal formula is convex (downside capped at 0 goals, upside an unbounded
+stepped ladder), so higher variance raises *expected* goals regardless
+of favourite/underdog status. Ceiling comes from
+`fetch_manager_ceiling()`, which pulls each manager's own real
+week-to-week score history from FPL's public `entry/{id}/history/`
+endpoint (their own personal streakiness, not a synthetic per-player
+model) — recalculated on every run, so a manager's ceiling naturally
+updates as their season goes on. A manager missing from the ceiling map
+(brand new team, request failure) just falls back to plain score, no
+boost. Pass `--ceiling-weight 0` to disable it and fall back to the
+pre-ceiling-weighting default of plain top-3-by-mean (also skips the
+history fetch, faster). Only affects GK/Strikers — Squad/Bench selection
+always uses plain score, since `backtest.py` found ceiling-weighting
+dilutes/doesn't help once pooled into the Squad sum.
+
+Whether this is the right general-purpose default depends on your
+club's actual position: for a club leading in EV most weeks, the
+"protect a lead" framing from classic favourite/underdog theory
+initially seemed to argue against variance — but that framing is about
+*win probability*, and SKLW is a *goals* format with a convex payoff
+shape, so the math (and the backtest) says ceiling-weighting the H2H
+slots helps regardless of standing. `--effective-ownership` (below) is
+the complementary tool for the captaincy-level version of the same
+question.
 
 By default the projected points come from FPL's own `ep_next` field.
 `--projections path/to/solio.csv` swaps that out for a Solio-style
@@ -168,16 +195,17 @@ the other 31 real managers involved in it). A manager captaining the
 club's template pick has a tight, low-variance score distribution; a
 manager captaining a genuine low-EO differential has a wide one.
 
-Classic favourite/underdog theory says the favourite should minimize
-variance (protect an existing edge) and only the underdog should chase
-it (a bigger spread is the only way to close a gap) — for a club that's
-usually AHEAD on projected EV, that means the main use of this is
-spotting which manager is riding a low-EO differential captaincy so you
-can steer them away from Strikers/GK (don't let a gamble put an
-existing lead at risk), not lean into one. The lean-into-variance case
-still applies, just as the exception rather than the default: only in
-the specific weeks `sklw_matchup.py`'s win probability actually flags
-you as the underdog.
+Classic favourite/underdog theory (favourite minimizes variance, only
+the underdog chases it) turns out to be the wrong lens here — that
+framing is about *win probability* in a symmetric-payoff game. SKLW
+isn't symmetric: the goal formula is convex (downside capped at 0,
+upside an unbounded stepped ladder — see `--ceiling-weight` above), so
+widening a manager's outcome distribution raises *expected goals*
+whether the club is ahead or behind on projected EV. So the main use of
+this is the same regardless of standing: use it alongside
+`--ceiling-weight` to see WHY a given manager scored high on ceiling —
+if it's coming from a genuine differential captaincy, that's the signal
+to actively put them in Strikers/GK rather than avoid it.
 
 Reads `--mode`/`--overrides` the same as a normal run, so it reflects
 recorded transfers/wildcards/TC picks in `--mode preview` — rerun after
