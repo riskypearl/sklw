@@ -156,6 +156,34 @@ actual-picks score, so chip adjustments aren't applied under this flag.
 Combine with `--projections` to base it on Solio's numbers instead of
 `ep_next`.
 
+`--effective-ownership` prints each real player's Effective Ownership
+(EO) across the club's own 16 managers, instead of the normal lineup
+suggestion: `EO% = (# managers starting them + # managers CAPTAINING
+them) / 16` — captaincy counts as an extra full share, the same
+convention as FPL's own global EO stat, just scoped to this specific
+club's 16 rather than the whole game (the public API doesn't expose
+global captaincy%, and the whole FPL player base isn't the relevant
+comparison anyway — the only "field" that matters for an SKLW matchup is
+the other 31 real managers involved in it). A manager captaining the
+club's template pick has a tight, low-variance score distribution; a
+manager captaining a genuine low-EO differential has a wide one.
+
+Classic favourite/underdog theory says the favourite should minimize
+variance (protect an existing edge) and only the underdog should chase
+it (a bigger spread is the only way to close a gap) — for a club that's
+usually AHEAD on projected EV, that means the main use of this is
+spotting which manager is riding a low-EO differential captaincy so you
+can steer them away from Strikers/GK (don't let a gamble put an
+existing lead at risk), not lean into one. The lean-into-variance case
+still applies, just as the exception rather than the default: only in
+the specific weeks `sklw_matchup.py`'s win probability actually flags
+you as the underdog.
+
+Reads `--mode`/`--overrides` the same as a normal run, so it reflects
+recorded transfers/wildcards/TC picks in `--mode preview` — rerun after
+every `--transfer` to keep it current, same as the normal lineup
+suggestion.
+
 `--lookup "name fragment"` searches FPL's bootstrap player list and
 prints element IDs — for building `overrides.json` without having to
 know player IDs by heart.

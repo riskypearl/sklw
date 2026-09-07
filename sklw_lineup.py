@@ -325,6 +325,19 @@ def pick_best_eleven(picks_data: dict, players: dict[int, dict],
     return [pid for _, pid in starters], captain
 
 
+def starters_and_captain(picks_data: dict, players: dict[int, dict],
+                          points: dict[int, float], use_best_xi: bool,
+                          forced_captain: int | None) -> tuple[list[int], int | None]:
+    """Same starter/captain choice used for scoring, factored out so
+    --effective-ownership can tally it without duplicating the branch
+    logic from the main scoring loop below."""
+    if use_best_xi:
+        return pick_best_eleven(picks_data, players, points, forced_captain)
+    starters = [p["element"] for p in picks_data["picks"] if p["position"] <= 11]
+    captain = next((p["element"] for p in picks_data["picks"] if p["is_captain"]), None)
+    return starters, captain
+
+
 def project_best_xi_score(picks_data: dict, players: dict[int, dict],
                            points: dict[int, float],
                            forced_captain: int | None = None) -> float:
@@ -1100,6 +1113,26 @@ def main():
                           "3-5 DEF, 2-5 MID, 1-3 FWD) picked from their real "
                           "15-man squad. Not the authoritative actual-picks "
                           "score -- chip adjustments aren't applied.")
+    ap.add_argument("--effective-ownership", action="store_true",
+                     help="print each real player's Effective Ownership "
+                          "(EO) across the club's 16 managers instead of "
+                          "the normal lineup suggestion: EO% = (# managers "
+                          "starting them + # managers CAPTAINING them) / "
+                          "16 -- captaincy counts as an extra full share, "
+                          "same convention as FPL's own EO stat, just "
+                          "scoped to this club's 16 instead of the whole "
+                          "game. A high-EO player is the club's template "
+                          "pick (safe, low variance if you're relying on "
+                          "them); a low-EO captain is a genuine "
+                          "differential (risky, wide variance) -- useful "
+                          "for spotting which manager's captain choice to "
+                          "lean into for a Strikers slot when the matchup "
+                          "calls for more variance, vs which is safest for "
+                          "GK. Reads --mode/--overrides the same as the "
+                          "normal run, so it reflects recorded transfers/ "
+                          "wildcards/TC picks in preview mode, not just "
+                          "live API data -- rerun after every --transfer "
+                          "to keep it current.")
     ap.add_argument("--list-transfers", action="store_true",
                      help="print all transfers recorded in overrides.json "
                           "this week (by player name), then exit.")
@@ -1353,6 +1386,57 @@ def main():
             print(f"Loaded {len(overrides)} manual override(s) from {ov_path}")
         else:
             print(f"No overrides file at {ov_path} -- using last-known squads as-is.")
+
+    if args.effective_ownership:
+        ownership: dict[int, int] = {}
+        captaincy: dict[int, int] = {}
+        n = 0
+        for name, mid in MANAGER_IDS.items():
+            if args.mode == "preview" and str(mid) in overrides and "manual_score" in overrides[str(mid)]:
+                print(f"  {name}: manual score override, no squad known -- skipped for EO")
+                continue
+            picks_data, gw_used = fetch_picks_with_fallback(mid, args.mode, last_finished_gw, next_gw)
+            if picks_data is None:
+                print(f"  {name}: could not fetch picks, skipped for EO")
+                continue
+            use_best_xi = args.best_xi or (gw_used != next_gw)
+            forced_captain = None
+            if args.mode == "preview" and str(mid) in overrides:
+                entry = overrides[str(mid)]
+                if "wildcard" in entry:
+                    picks_data = apply_wildcard(picks_data, entry["wildcard"])
+                    use_best_xi = True
+                else:
+                    picks_data = apply_overrides(picks_data, entry)
+                if "tc_captain" in entry:
+                    forced_captain = entry["tc_captain"]
+                    use_best_xi = True
+            starters, captain = starters_and_captain(picks_data, players, points, use_best_xi, forced_captain)
+            n += 1
+            for eid in starters:
+                ownership[eid] = ownership.get(eid, 0) + 1
+            if captain is not None:
+                captaincy[captain] = captaincy.get(captain, 0) + 1
+
+        if n == 0:
+            print("ERROR: couldn't compute EO -- no manager's squad was fetchable.")
+            return
+
+        rows = []
+        for eid in set(ownership) | set(captaincy):
+            own = ownership.get(eid, 0)
+            cap = captaincy.get(eid, 0)
+            eo = (own + cap) / n * 100
+            el = players.get(eid)
+            pname = f"{el['first_name']} {el['second_name']}" if el else f"element #{eid}"
+            rows.append((eo, own, cap, pname))
+        rows.sort(reverse=True)
+
+        print(f"\n=== Effective Ownership across {n} club managers ===")
+        print(f"{'Player':<25} {'EO%':>7}   {'Started':>9}   {'Captained':>10}")
+        for eo, own, cap, pname in rows:
+            print(f"{pname:<25} {eo:>6.1f}%   {own:>6}/{n}   {cap:>7}/{n}")
+        return
 
     if args.explain:
         member_name, mid = resolve_manager(args.explain)
