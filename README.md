@@ -120,8 +120,30 @@ club's actual position: for a club leading in EV most weeks, the
 initially seemed to argue against variance — but that framing is about
 *win probability*, and SKLW is a *goals* format with a convex payoff
 shape, so the math (and the backtest) says ceiling-weighting the H2H
-slots helps regardless of standing. `--effective-ownership` (below) is
-the complementary tool for the captaincy-level version of the same
+slots helps regardless of standing.
+
+**A tested and rejected refinement:** an independent model (given only
+the raw SKLW rules, no access to this project's own findings) argued
+GK's payoff is actually *concave*, not convex — it's purely short two
+of the opponent's option positions, gets no reward for scoring higher
+than "enough to clear the bar," so it should be picked for a reliable
+*floor* (mean − k×std) rather than ceiling, while only Strikers should
+chase ceiling. Theoretically sound reasoning about the payoff shapes in
+isolation — but `backtest.py`'s `assign_method_c` tests it directly
+(GK-by-floor, Strikers-by-ceiling, as a split rather than method B's
+uniform ceiling-weighting) and it loses at every floor-weight tested,
+going net-negative past `k_gk≈1.5`. The reason: mean and ceiling are
+strongly correlated in real FPL scores (r≈0.70 measured on the archive)
+— chasing a lower-variance floor means systematically picking a
+*lower-mean* player, and GK's absolute score still has to clear the bar
+against two opposing Strikers, so the mean sacrifice costs more than
+the safety buys. Kept in `backtest.py` as a documented negative result
+(with a correctness-only test in `test_scoring.py`, not a performance
+claim) rather than deleted — the uniform ceiling-weighting in method B
+remains the validated approach, live as `--ceiling-weight` above.
+
+`--effective-ownership` (below) is the complementary tool for the
+captaincy-level version of the same
 question.
 
 By default the projected points come from FPL's own `ep_next` field.

@@ -195,6 +195,27 @@ def _run_suggest_lineup(scores, fh_names=None, ceiling=None, k=0.5):
     return sections
 
 
+class BacktestMethodCTests(unittest.TestCase):
+    """assign_method_c (GK-by-floor, Strikers-by-ceiling) was tested
+    against real historical data and REJECTED -- it never beat method B
+    (uniform ceiling-weighting) at any k_gk, and got worse than plain
+    mean once k_gk went much above 0 (see README). Not used by any live
+    tool. This just locks in that the function itself stays well-formed
+    (a valid 16-way partition) so it doesn't bitrot silently -- it's
+    kept in backtest.py as a documented negative result, not dead code
+    to delete."""
+
+    def test_valid_partition(self):
+        members = [{"mean_proj": float(i), "std_proj": float(15 - i) % 7} for i in range(16)]
+        roles = backtest.assign_method_c(members, k_gk=0.5, k_s=0.5)
+        self.assertEqual(len(roles["gk"]), 1)
+        self.assertEqual(len(roles["strikers"]), 2)
+        self.assertEqual(len(roles["squad"]), 11)
+        self.assertEqual(len(roles["bench"]), 2)
+        all_assigned = roles["gk"] + roles["strikers"] + roles["squad"] + roles["bench"]
+        self.assertEqual(sorted(all_assigned), list(range(16)))
+
+
 class SuggestLineupPriorityTests(unittest.TestCase):
     """sklw_lineup.py's own copy of the GK-first/Strikers-next priority,
     plus the Free Hit override ordering (also GK-first)."""

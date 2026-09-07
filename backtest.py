@@ -228,6 +228,31 @@ def assign_method_b(members: list[dict], k: float) -> dict:
     return {"strikers": strikers, "gk": gk, "squad": by_mean[0:11], "bench": by_mean[11:13]}
 
 
+def assign_method_c(members: list[dict], k_gk: float, k_s: float) -> dict:
+    """Split floor/ceiling weighting -- GK by FLOOR (mean - k_gk*std),
+    Strikers by CEILING (mean + k_s*std), rather than method B's uniform
+    ceiling-weighting for the whole top-3 pool. Tests a hypothesis an
+    independent model (given only the raw SKLW rules, no access to this
+    file's findings) worked out from the payoff shapes: a Striker's
+    payoff is convex (floored at 0 goals, unbounded stepped upside -- a
+    long option, wants ceiling), but a GK's payoff is CONCAVE (purely
+    short two of the opponent's option positions -- pure downside
+    protection, no reward for scoring higher than 'enough to clear the
+    bar', so it wants a reliable floor, not upside that gets wasted).
+    GK is picked first (from all 16, by floor), Strikers picked next
+    from whoever's left (by ceiling) -- not from a shared top-3 pool,
+    since the two roles are now ranked by different statistics
+    entirely."""
+    gk_order = sorted(range(16), key=lambda i: -(members[i]["mean_proj"] - k_gk * members[i]["std_proj"]))
+    gk = gk_order[0]
+    striker_pool = [i for i in range(16) if i != gk]
+    striker_order = sorted(striker_pool, key=lambda i: -(members[i]["mean_proj"] + k_s * members[i]["std_proj"]))
+    strikers = striker_order[0:2]
+    remaining = [i for i in range(16) if i != gk and i not in strikers]
+    by_mean = sorted(remaining, key=lambda i: -members[i]["mean_proj"])
+    return {"strikers": strikers, "gk": [gk], "squad": by_mean[0:11], "bench": by_mean[11:13]}
+
+
 def h2h_goals(a_actual: float, b_actual: float) -> int:
     """Goals for the 'a' side of one individual H2H battle (SKLW's own
     rule: 1 goal per full 20-point margin, zero if b equals/outscores a)."""
@@ -343,6 +368,41 @@ def main():
           f"{statistics.mean(d for *_, d in trials):.3f} for plain mean)")
     print(f"Suggested rule: individual-role score = mean_projection + {best_k} * "
           f"stdev(player's own recent real scores)")
+
+    # Method C: split floor/ceiling weighting (GK by floor, Strikers by
+    # ceiling) vs method B's uniform ceiling-weighting for the shared
+    # top-3 pool -- see assign_method_c's docstring. Hold k_s fixed at
+    # method B's already-validated best k and sweep k_gk against it,
+    # using the SAME trials so it's a fair comparison.
+    k_s = best_k
+    print(f"\n=== Method C: GK by floor, Strikers by ceiling (k_s={k_s} fixed) ===")
+    print(f"{'k_gk':>5}  {'avg net diff':>12}  {'C > A':>8}  {'A > C':>8}  {'tied':>8}")
+    best_kgk, best_c_avg = None, float("-inf")
+    for k_gk_str in args.k_values.split(","):
+        k_gk = float(k_gk_str)
+        diffs_c = []
+        wins_a = draws = wins_c = 0
+        for club1, club2, roles2_a, diff_a in trials:
+            roles1_c = assign_method_c(club1, k_gk, k_s)
+            for_c = match_goals(club1, roles1_c, club2, roles2_a)
+            against_c = match_goals(club2, roles2_a, club1, roles1_c)
+            diff_c = for_c - against_c
+            diffs_c.append(diff_c)
+            if diff_c > diff_a:
+                wins_c += 1
+            elif diff_c < diff_a:
+                wins_a += 1
+            else:
+                draws += 1
+        avg_c = statistics.mean(diffs_c)
+        print(f"{k_gk:>5.1f}  {avg_c:>12.3f}  {100*wins_c/n:>7.1f}%  {100*wins_a/n:>7.1f}%  {100*draws/n:>7.1f}%")
+        if avg_c > best_c_avg:
+            best_c_avg, best_kgk = avg_c, k_gk
+
+    print(f"\nBest k_gk for method C: {best_kgk} (avg net diff {best_c_avg:.3f})")
+    print(f"Method B best (uniform ceiling-weighting, k={best_k}): {best_avg:.3f}")
+    winner = "C (split floor/ceiling)" if best_c_avg > best_avg else "B (uniform ceiling-weighting)"
+    print(f"Winner: Method {winner}")
 
     if args.covariance:
         print(f"\n=== Same-team defender stacking ===")
