@@ -34,6 +34,7 @@ import random
 import statistics
 import sys
 import unicodedata
+from collections import Counter
 from pathlib import Path
 
 import requests
@@ -1039,6 +1040,26 @@ def pending_starter_names(club: dict[str, dict], players: dict[int, dict],
     return out
 
 
+def gk_strikers_pending_tally(club: dict[str, dict], roles: dict[str, list[str]],
+                               players: dict[int, dict], live_locked: dict[int, float]
+                               ) -> list[tuple[str, int]]:
+    """Condensed view of pending_starter_names, filtered to just the GK
+    + 2 Strikers managers (the ones whose scores directly enter the H2H
+    comparison) and tallied by player name instead of listed per
+    manager -- e.g. [('Haaland', 2)] if both Strikers happen to own him.
+    Requested live: the full per-manager pending list is useful but
+    verbose when what's actually wanted is just the GK/Strikers picture.
+    Sorted by count descending, then name, so the most-shared pending
+    players surface first."""
+    gk_strikers = roles["gk"] + roles["strikers"]
+    pending = pending_starter_names(club, players, live_locked)
+    counts: Counter[str] = Counter()
+    for name in gk_strikers:
+        for player_name in pending.get(name, []):
+            counts[player_name] += 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
 def print_roles(label: str, club: dict[str, dict], roles: dict[str, list[str]]) -> None:
     print(f"\n{label} suggested roles (by projection):")
     print(f"  GK:       {roles['gk'][0]} ({club[roles['gk'][0]]['projected']:.1f})")
@@ -1329,6 +1350,17 @@ def main():
         for n, names in them_pending_names.items():
             if names:
                 print(f"    {n}: {', '.join(names)}")
+
+        us_gk_strikers_pending = gk_strikers_pending_tally(us_club, us_roles, players, live_locked)
+        them_gk_strikers_pending = gk_strikers_pending_tally(them_club, them_roles, players, live_locked)
+
+        def _fmt(tally: list[tuple[str, int]]) -> str:
+            return ", ".join(f"{n} x{c}" if c > 1 else n for n, c in tally) or "none"
+
+        print("\nGK/Strikers still to play (the ones that directly decide "
+              "the Strikers-vs-GK H2H):")
+        print(f"  Us:   {_fmt(us_gk_strikers_pending)}")
+        print(f"  Them: {_fmt(them_gk_strikers_pending)}")
 
     rng = random.Random(args.seed)
     print(f"\nRunning {args.sims} simulated matchweeks...")

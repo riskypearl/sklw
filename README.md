@@ -646,7 +646,12 @@ manager)" section lists the actual player NAMES behind each manager's
 pending count — a bare "104 of our starters, 104 of theirs" doesn't say
 WHO, e.g. a club currently leading on already-known results just
 because more of its players happened to have early kickoffs isn't
-visible from a count alone.
+visible from a count alone. Below that, a "GK/Strikers still to play"
+line condenses the same information down to just the 3 managers per
+side whose scores actually decide the Strikers-vs-GK H2H (the full
+per-manager list is useful but verbose when that's specifically what
+you want) — tallied by player name, e.g. "Haaland x2" if both Strikers
+happen to own him.
 
 By default both sides' GK/Strikers/Squad/Bench are assigned by assumed-
 optimal projection ranking (same rule as `sklw_lineup.py`). If you

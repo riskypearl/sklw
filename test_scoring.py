@@ -267,6 +267,58 @@ class PendingStarterNamesTests(unittest.TestCase):
         self.assertEqual(result["Alice"], [])
 
 
+class GkStrikersPendingTallyTests(unittest.TestCase):
+    """Requested live: the full per-manager pending list was useful but
+    verbose when what's actually wanted is just the GK/Strikers picture
+    -- gk_strikers_pending_tally() filters to just those 3 managers and
+    tallies by player name (e.g. 'Haaland x2' if both Strikers own him),
+    ignoring Squad/Bench managers' pending players entirely."""
+
+    def setUp(self):
+        self.players = {
+            1: {"first_name": "Erling", "second_name": "Haaland"},
+            2: {"first_name": "Yoane", "second_name": "Wissa"},
+            3: {"first_name": "Bukayo", "second_name": "Saka"},
+        }
+
+    def test_tallies_only_gk_and_strikers_managers(self):
+        club = {
+            "gk_mgr": {"starters": [1], "captain": 1},
+            "striker1": {"starters": [1, 2], "captain": 1},
+            "striker2": {"starters": [1], "captain": 1},
+            "squad_mgr": {"starters": [3], "captain": 3},
+        }
+        roles = {"gk": ["gk_mgr"], "strikers": ["striker1", "striker2"],
+                 "squad": ["squad_mgr"], "bench": []}
+        result = sklw_matchup.gk_strikers_pending_tally(club, roles, self.players, {})
+        # Haaland owned by all 3 GK/Strikers managers -> x3; Wissa by
+        # just striker1 -> x1; Saka (squad_mgr only) excluded entirely.
+        self.assertEqual(result, [("Erling Haaland", 3), ("Yoane Wissa", 1)])
+
+    def test_already_started_players_excluded(self):
+        club = {
+            "gk_mgr": {"starters": [1], "captain": 1},
+            "striker1": {"starters": [1], "captain": 1},
+            "striker2": {"starters": [1], "captain": 1},
+        }
+        roles = {"gk": ["gk_mgr"], "strikers": ["striker1", "striker2"],
+                 "squad": [], "bench": []}
+        live_locked = {1: 10.0}  # Haaland's match already started
+        result = sklw_matchup.gk_strikers_pending_tally(club, roles, self.players, live_locked)
+        self.assertEqual(result, [])
+
+    def test_manual_score_gk_or_striker_contributes_nothing(self):
+        club = {
+            "gk_mgr": {"manual_score": 40.0},
+            "striker1": {"starters": [1], "captain": 1},
+            "striker2": {"starters": [2], "captain": 2},
+        }
+        roles = {"gk": ["gk_mgr"], "strikers": ["striker1", "striker2"],
+                 "squad": [], "bench": []}
+        result = sklw_matchup.gk_strikers_pending_tally(club, roles, self.players, {})
+        self.assertEqual(result, [("Erling Haaland", 1), ("Yoane Wissa", 1)])
+
+
 class SklwMatchupFreeHitTests(unittest.TestCase):
     """sklw_matchup.py's assign_roles had NO Free Hit handling at all --
     an FH manager's often-unrepresentative projection could silently
