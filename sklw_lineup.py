@@ -1631,11 +1631,13 @@ def main():
         use_best_xi = args.best_xi or (gw_used != next_gw)
 
         forced_captain = None
+        is_wildcard = False
         if args.mode == "preview" and str(mid) in overrides:
             entry = overrides[str(mid)]
             if "wildcard" in entry:
                 picks_data = apply_wildcard(picks_data, entry["wildcard"])
                 use_best_xi = True  # real starting-11/captain for a wildcarded squad isn't known
+                is_wildcard = True
             else:
                 picks_data = apply_overrides(picks_data, entry)
             if "tc_captain" in entry:
@@ -1647,7 +1649,8 @@ def main():
         else:
             score = project_manager_score(picks_data, points)
         tag = "best-xi" if use_best_xi else "actual picks"
-        print(f"  {name} (GW{gw_used} squad, {tag}): projected {score}")
+        wc_tag = " WC" if is_wildcard else ""
+        print(f"  {name} (GW{gw_used} squad, {tag}): projected {score}{wc_tag}")
         scores.append((name, score))
 
     suggest_lineup(scores, fh_names, ceiling, args.ceiling_weight)
