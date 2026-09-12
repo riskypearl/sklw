@@ -157,9 +157,15 @@ GW — Solio numbers these relative to the current GW, not always starting
 at `1`). Anyone in the squad that the CSV doesn't match falls back to
 `ep_next` automatically, with a warning listing what didn't match so you
 can sanity-check it. If no `--projections` path is given, it auto-detects
-a CSV: checks for `solio.csv` in this folder first, then falls back to
-the most recently downloaded CSV in your Downloads folder that actually
-looks like a Solio export (checked by header content, not filename).
+a CSV: considers both `solio.csv` in this folder (if present and it
+actually looks like a Solio export) and the most recently downloaded
+matching CSV in your Downloads folder, and picks whichever is NEWER by
+modification time — so a fresh weekly export dropped in Downloads is
+picked up automatically even if there's an older `solio.csv` still
+sitting in this folder from a previous week (an earlier version always
+preferred the local file unconditionally, which silently blocked a
+freshly downloaded one from ever being used — fixed after hitting this
+in practice).
 
 If you don't have a Solio CSV, just drop one you were given as
 `solio.csv` in this folder (or anywhere in your Downloads) and it'll be

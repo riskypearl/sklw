@@ -300,23 +300,39 @@ def load_solio_projections(csv_path: Path, bootstrap: dict) -> dict[int, float]:
     return points
 
 
+def _is_solio_csv(path: Path) -> bool:
+    """Content check (not just filename) so an unrelated CSV isn't picked
+    up by mistake."""
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as f:
+            header = next(csv.reader(f), [])
+    except (OSError, StopIteration):
+        return False
+    return {"Pos", "ID", "Name", "Team"}.issubset(header) and any(c.endswith("_Pts") for c in header)
+
+
 def find_solio_csv() -> Path | None:
+    """Considers BOTH 'solio.csv' in the current folder (if present and
+    valid) AND the most recently downloaded matching CSV in Downloads,
+    and returns whichever is NEWER by modification time -- a stale local
+    solio.csv must not silently block a freshly downloaded one (see
+    sklw_lineup.py's copy of this function for the full reasoning)."""
+    candidates: list[Path] = []
+
     here = Path("solio.csv")
-    if here.exists():
-        return here
+    if here.exists() and _is_solio_csv(here):
+        candidates.append(here)
+
     downloads = Path.home() / "Downloads"
-    if not downloads.is_dir():
+    if downloads.is_dir():
+        for p in sorted(downloads.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if _is_solio_csv(p):
+                candidates.append(p)
+                break
+
+    if not candidates:
         return None
-    candidates = sorted(downloads.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for p in candidates:
-        try:
-            with p.open(encoding="utf-8-sig", newline="") as f:
-                header = next(csv.reader(f), [])
-        except (OSError, StopIteration):
-            continue
-        if {"Pos", "ID", "Name", "Team"}.issubset(header) and any(c.endswith("_Pts") for c in header):
-            return p
-    return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 def pick_best_eleven(picks_data: dict, players: dict[int, dict],

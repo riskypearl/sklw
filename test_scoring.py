@@ -23,11 +23,17 @@ projected score), Strikers get the next 2 -- not the other way around
 Run: python3 -m unittest test_scoring.py -v
 """
 import io
+import os
+import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
+from unittest import mock
 
 import backtest
 import calibrate_matchup
+import draft_lineup
 import sklw_lineup
 import sklw_matchup
 
@@ -193,6 +199,61 @@ def _run_suggest_lineup(scores, fh_names=None, ceiling=None, k=0.5):
         elif current and line.startswith("  ") and ":" in line and not line.strip().startswith("-->"):
             sections[current].append(line.strip().split(":")[0])
     return sections
+
+
+class FindSolioCsvFreshnessTests(unittest.TestCase):
+    """find_solio_csv() is duplicated in sklw_lineup.py/sklw_matchup.py/
+    draft_lineup.py. An earlier version always preferred a local
+    'solio.csv' unconditionally over anything in Downloads -- meaning a
+    stale local file left over from a previous week silently blocked a
+    freshly downloaded export from ever being picked up, defeating the
+    whole point of the weekly drop-a-fresh-export-and-run workflow. Now
+    it compares modification times and picks whichever is actually
+    newer. Runs against all three copies to catch drift."""
+
+    MODULES = (sklw_lineup, sklw_matchup, draft_lineup)
+    SOLIO_HEADER = "Pos,ID,Name,BV,SV,Team,1_xMins,1_Pts\n"
+    SOLIO_ROW = "FWD,1,Haaland,15,15,MCI,90,10\n"
+
+    def _make_csv(self, path: Path, mtime_offset: float) -> None:
+        path.write_text(self.SOLIO_HEADER + self.SOLIO_ROW)
+        t = time.time() + mtime_offset
+        os.utime(path, (t, t))
+
+    def _run_in(self, cwd_dir: str, home: Path, mod):
+        real_cwd = os.getcwd()  # captured BEFORE any patching/chdir
+        os.chdir(cwd_dir)
+        try:
+            with mock.patch.object(Path, "home", return_value=home):
+                return mod.find_solio_csv()
+        finally:
+            os.chdir(real_cwd)
+
+    def test_fresh_downloads_file_beats_stale_local_solio_csv(self):
+        for mod in self.MODULES:
+            with tempfile.TemporaryDirectory() as home_dir, tempfile.TemporaryDirectory() as cwd_dir:
+                home = Path(home_dir)
+                (home / "Downloads").mkdir()
+                fresh = home / "Downloads" / "export.csv"
+                self._make_csv(fresh, mtime_offset=0)
+                stale_local = Path(cwd_dir) / "solio.csv"
+                self._make_csv(stale_local, mtime_offset=-100000)
+
+                result = self._run_in(cwd_dir, home, mod)
+                self.assertEqual(result, fresh, mod.__name__)
+
+    def test_fresh_local_solio_csv_beats_stale_downloads_file(self):
+        for mod in self.MODULES:
+            with tempfile.TemporaryDirectory() as home_dir, tempfile.TemporaryDirectory() as cwd_dir:
+                home = Path(home_dir)
+                (home / "Downloads").mkdir()
+                stale_downloads = home / "Downloads" / "export.csv"
+                self._make_csv(stale_downloads, mtime_offset=-100000)
+                fresh_local = Path(cwd_dir) / "solio.csv"
+                self._make_csv(fresh_local, mtime_offset=0)
+
+                result = self._run_in(cwd_dir, home, mod)
+                self.assertEqual(result, Path("solio.csv"), mod.__name__)
 
 
 class BacktestMethodCTests(unittest.TestCase):

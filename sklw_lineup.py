@@ -239,31 +239,44 @@ def load_solio_projections(csv_path: Path, bootstrap: dict, horizon: int = 1) ->
     return points
 
 
+def _is_solio_csv(path: Path) -> bool:
+    """Content check (not just filename) so an unrelated CSV isn't picked
+    up by mistake."""
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as f:
+            header = next(csv.reader(f), [])
+    except (OSError, StopIteration):
+        return False
+    return {"Pos", "ID", "Name", "Team"}.issubset(header) and any(c.endswith("_Pts") for c in header)
+
+
 def find_solio_csv() -> Path | None:
     """Finds a Solio projections CSV automatically -- no need to rename or
-    move a fresh weekly export by hand. Checks 'solio.csv' in the current
-    folder first (an explicit, stable override if you want one), then
-    falls back to the most recently downloaded CSV in the user's Downloads
-    folder whose header actually looks like a Solio export (checked by
-    content, not just filename, so an unrelated CSV isn't picked up by
-    mistake)."""
+    move a fresh weekly export by hand. Considers BOTH 'solio.csv' in the
+    current folder (if present and it actually looks like a Solio export)
+    AND the most recently downloaded CSV in the user's Downloads folder
+    that looks like one, and returns whichever is NEWER by modification
+    time -- a stale local solio.csv left over from a previous week must
+    not silently block a freshly downloaded one from ever being picked up
+    (an earlier version always preferred the local file unconditionally,
+    which is exactly backwards for the weekly drop-a-fresh-export-and-run
+    workflow this is meant to support)."""
+    candidates: list[Path] = []
+
     here = Path("solio.csv")
-    if here.exists():
-        return here
+    if here.exists() and _is_solio_csv(here):
+        candidates.append(here)
 
     downloads = Path.home() / "Downloads"
-    if not downloads.is_dir():
+    if downloads.is_dir():
+        for p in sorted(downloads.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
+            if _is_solio_csv(p):
+                candidates.append(p)
+                break  # only need the single freshest matching one from Downloads
+
+    if not candidates:
         return None
-    candidates = sorted(downloads.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for p in candidates:
-        try:
-            with p.open(encoding="utf-8-sig", newline="") as f:
-                header = next(csv.reader(f), [])
-        except (OSError, StopIteration):
-            continue
-        if {"Pos", "ID", "Name", "Team"}.issubset(header) and any(c.endswith("_Pts") for c in header):
-            return p
-    return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 def find_latest_screenshot() -> Path | None:
