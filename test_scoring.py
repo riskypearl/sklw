@@ -186,6 +186,48 @@ class RoleAssignmentPriorityTests(unittest.TestCase):
         self.assertFalse(set(roles["gk"]) & set(roles["strikers"]))
 
 
+class MatchupPinsPersistenceTests(unittest.TestCase):
+    """Reported live: having to retype the same scouted GK/Strikers IDs
+    on every run within the same gameweek was real, avoidable friction.
+    load_pins/save_pins/resolve_and_remember persist them locally
+    (matchup_pins.json, gitignored) so they're remembered across runs,
+    always visibly (never a silent surprise), and always overridable by
+    an explicit CLI flag."""
+
+    def test_missing_file_yields_empty_structure(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pins.json")
+            self.assertEqual(sklw_matchup.load_pins(path), {"us": {}, "them": {}})
+
+    def test_save_then_load_round_trips_exactly(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pins.json")
+            pins = {"us": {"gk_id": "123", "strikers_ids": "456,789"},
+                    "them": {"Fried Rice Eater": {"gk_id": "1", "strikers_ids": "2,3"}}}
+            sklw_matchup.save_pins(path, pins)
+            self.assertEqual(sklw_matchup.load_pins(path), pins)
+
+    def test_malformed_json_handled_gracefully(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pins.json")
+            with open(path, "w") as f:
+                f.write("not valid json{{{")
+            self.assertEqual(sklw_matchup.load_pins(path), {"us": {}, "them": {}})
+
+    def test_cli_value_always_wins_over_saved(self):
+        result = sklw_matchup.resolve_and_remember("999", "123", "prompt", no_prompt=True, field_label="x")
+        self.assertEqual(result, "999")
+
+    def test_saved_value_used_without_reprompting(self):
+        with mock.patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            result = sklw_matchup.resolve_and_remember(None, "123", "prompt", no_prompt=True, field_label="x")
+        self.assertEqual(result, "123")
+
+    def test_neither_cli_nor_saved_falls_through_to_prompt(self):
+        result = sklw_matchup.resolve_and_remember(None, None, "prompt", no_prompt=True, field_label="x")
+        self.assertIsNone(result)  # no_prompt=True -> prompt_for_role_ids skips and returns None
+
+
 class PendingStarterNamesTests(unittest.TestCase):
     """Requested live: 'Still to play: 104 of our starters, 104 of
     theirs' as a bare count didn't say WHO -- pending_starter_names()

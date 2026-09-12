@@ -621,6 +621,24 @@ as always. Also automatically skipped if stdin isn't a real interactive
 terminal (e.g. output piped to a file), so it never hangs waiting for
 input that isn't coming.
 
+**Whatever you enter (or pass via flag) for GK/Strikers is remembered**
+in `matchup_pins.json` (gitignored — local only) so you don't have to
+retype the same scouted IDs on every run within the same gameweek. "Us"
+pins apply regardless of opponent (your own declared lineup doesn't
+change based on who you're facing); "them" pins are stored per opponent
+(keyed by `--opponent` club name, or one shared slot for a raw
+`--them`/`--them-file` run). Reusing a saved value always prints which
+one it used, so it's never a silent surprise, and an explicit CLI flag
+always overrides it for that run. `--reset-pins` clears saved pins for
+the current opponent (or everything, `--opponent` included, if run
+without one) before continuing, rather than needing to delete the file
+by hand. `--pins-file path` points at a different file if needed. Free
+Hit pins (`--us-fh-id`/`--them-fh-id`) are deliberately NOT persisted —
+unlike GK/Strikers, FH is a one-time chip, not a stable weekly fact, so
+silently re-forcing a manager into GK/Strikers on some future week long
+after their real FH chip is gone would be a real footgun rather than a
+convenience.
+
 **How accurate is it?** Run `python calibrate_matchup.py` to check —
 it builds synthetic matchups from real historical FPL data (two seasons:
 one purely to train the score-variance model, a DIFFERENT one to check

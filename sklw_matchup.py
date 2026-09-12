@@ -571,6 +571,52 @@ def resolve_role_ids(spec: str | None, roster: dict[str, int], label: str) -> se
     return names
 
 
+PINS_FILE = "matchup_pins.json"
+
+
+def load_pins(path: str) -> dict:
+    """Persisted GK/Strikers/FH ID pins from a previous run, so they
+    don't need retyping every single time -- reported live: entering
+    the same scouted IDs run after run with no memory of them was
+    real, avoidable friction. 'us' pins apply regardless of opponent
+    (your own declared lineup doesn't change based on who you're
+    facing); 'them' pins are stored per opponent (keyed by --opponent
+    club name, or 'default' for a raw --them/--them-file run with no
+    stable name to key on), since a scouted opponent GK obviously
+    doesn't carry over to a different club next matchup."""
+    p = Path(path)
+    if not p.exists():
+        return {"us": {}, "them": {}}
+    try:
+        data = json.loads(p.read_text())
+    except json.JSONDecodeError:
+        return {"us": {}, "them": {}}
+    data.setdefault("us", {})
+    data.setdefault("them", {})
+    return data
+
+
+def save_pins(path: str, pins: dict) -> None:
+    Path(path).write_text(json.dumps(pins, indent=2))
+
+
+def resolve_and_remember(cli_value: str | None, saved_value: str | None,
+                          prompt_text: str, no_prompt: bool, field_label: str) -> str | None:
+    """One field's full resolution order: an explicit CLI flag always
+    wins; otherwise a previously-saved value is reused automatically
+    (printed so it's never a silent surprise); otherwise fall through
+    to the normal interactive prompt (still skippable with Enter, still
+    skipped entirely by --no-prompt/non-interactive stdin, same as
+    prompt_for_role_ids alone)."""
+    if cli_value:
+        return cli_value
+    if saved_value:
+        print(f"Using saved {field_label}: {saved_value} (pass the flag "
+              f"explicitly to override, or --reset-pins to clear all saved pins)")
+        return saved_value
+    return prompt_for_role_ids(None, f"{prompt_text} (Enter to skip): ", no_prompt)
+
+
 def prompt_for_role_ids(current: str | None, prompt_text: str, no_prompt: bool) -> str | None:
     """Falls back to an interactive input() for a GK/Strikers ID flag
     that wasn't given on the command line -- --them-gk-id/--them-
@@ -1070,6 +1116,15 @@ def main():
                           "run) -- unpinned managers just get the "
                           "assumed-optimal projection-based assignment "
                           "as normal.")
+    ap.add_argument("--pins-file", default=PINS_FILE,
+                     help=f"path to the saved GK/Strikers/FH ID pins "
+                          f"file (default: {PINS_FILE} in the current "
+                          f"folder)")
+    ap.add_argument("--reset-pins", action="store_true",
+                     help="clear all saved pins for this opponent (or "
+                          "all saved pins entirely if --opponent isn't "
+                          "given) before running, instead of reusing "
+                          "them")
     ap.add_argument("--projections", metavar="CSV_PATH",
                      help="Solio-style projections CSV (see sklw_lineup.py). "
                           "Defaults to auto-detecting solio.csv / Downloads, "
@@ -1194,20 +1249,44 @@ def main():
         print("ERROR: too few managers fetched on one side to form a valid lineup (need 15)")
         sys.exit(1)
 
+    pins = load_pins(args.pins_file)
+    opponent_key = args.opponent if args.opponent else "default"
+    if args.reset_pins:
+        pins["them"].pop(opponent_key, None)
+        if not args.opponent:
+            pins["us"] = {}
+        print(f"Cleared saved pins for {'opponent ' + opponent_key if args.opponent else 'this club (us + default them)'}.")
+    us_saved = pins["us"]
+    them_saved = pins["them"].get(opponent_key, {})
+
     if not args.no_prompt and sys.stdin.isatty():
         print("\nIf you know either club's REAL declared GK/Strikers for this "
               "matchup (scouted from their lineup), enter the FPL manager "
               "ID(s) below to pin them -- otherwise just press Enter to skip "
-              "and let the tool assume an optimal assignment. "
-              "(--no-prompt skips all of this.)")
-    args.them_gk_id = prompt_for_role_ids(
-        args.them_gk_id, "Opponent's real GK manager ID (Enter to skip): ", args.no_prompt)
-    args.them_strikers_ids = prompt_for_role_ids(
-        args.them_strikers_ids, "Opponent's real Strikers manager IDs, comma-separated (Enter to skip): ", args.no_prompt)
-    args.us_gk_id = prompt_for_role_ids(
-        args.us_gk_id, "Our real GK manager ID (Enter to skip): ", args.no_prompt)
-    args.us_strikers_ids = prompt_for_role_ids(
-        args.us_strikers_ids, "Our real Strikers manager IDs, comma-separated (Enter to skip): ", args.no_prompt)
+              "and let the tool assume an optimal assignment. Anything "
+              "entered (or already saved from a previous run) is remembered "
+              "in matchup_pins.json for next time. (--no-prompt skips all "
+              "of this; --reset-pins clears saved pins first.)")
+    args.them_gk_id = resolve_and_remember(
+        args.them_gk_id, them_saved.get("gk_id"),
+        "Opponent's real GK manager ID", args.no_prompt, "opponent GK")
+    args.them_strikers_ids = resolve_and_remember(
+        args.them_strikers_ids, them_saved.get("strikers_ids"),
+        "Opponent's real Strikers manager IDs, comma-separated", args.no_prompt, "opponent Strikers")
+    args.us_gk_id = resolve_and_remember(
+        args.us_gk_id, us_saved.get("gk_id"),
+        "Our real GK manager ID", args.no_prompt, "our GK")
+    args.us_strikers_ids = resolve_and_remember(
+        args.us_strikers_ids, us_saved.get("strikers_ids"),
+        "Our real Strikers manager IDs, comma-separated", args.no_prompt, "our Strikers")
+
+    pins["us"] = {"gk_id": args.us_gk_id, "strikers_ids": args.us_strikers_ids}
+    pins["them"][opponent_key] = {"gk_id": args.them_gk_id, "strikers_ids": args.them_strikers_ids}
+    save_pins(args.pins_file, pins)
+    # Free Hit is a one-time chip, not a stable weekly fact like GK/
+    # Strikers pins -- deliberately NOT persisted, to avoid silently
+    # re-forcing a manager into GK/Strikers on a future week after
+    # their actual FH chip is long gone.
 
     us_forced_gk = next(iter(resolve_role_ids(args.us_gk_id, us_roster, "us-gk-id")), None)
     them_forced_gk = next(iter(resolve_role_ids(args.them_gk_id, them_roster, "them-gk-id")), None)
