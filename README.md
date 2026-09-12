@@ -520,6 +520,26 @@ than one, or matches none — never a silent guess. `--clubs-file path`
 points at a different file if you keep it somewhere other than the
 project folder.
 
+If the master list lives in a Google Sheet shared as "Anyone with the
+link can view", `fetch_master_list.py` grabs it directly instead of
+exporting/downloading a CSV by hand each time:
+```
+python fetch_master_list.py --sheet-id <SHEET_ID> --gid <GID>
+```
+`<SHEET_ID>` is the long ID in the sheet's URL
+(`.../spreadsheets/d/<SHEET_ID>/...`); `<GID>` is the tab ID (the number
+after `#gid=` when that tab is open). Uses Google's plain unauthenticated
+per-tab CSV export endpoint — no login, no browser automation (unlike
+`fetch_solio.py`, which needs one because Solio's own site enforces a
+real Google sign-in). If the sheet isn't actually shared publicly,
+Google serves an HTML sign-in page instead of CSV — this is checked for
+explicitly and fails clearly rather than silently writing garbage HTML
+into the output file. The master list may be split across multiple
+tabs (this league's is — a bye-week team turned out to live on a
+separate tab from the main list); repeat `--gid` to fetch several and
+concatenate them into one CSV. Chain straight into `build_clubs_json.py`
+afterwards, same as a manually-exported CSV.
+
 Picks up the SAME `overrides.json` `sklw_lineup.py` writes to — any
 `--wildcard`/`--transfer`/`--tc`/`--set-score` already recorded there
 applies automatically (matched by manager ID, works for either roster,

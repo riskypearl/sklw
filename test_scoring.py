@@ -36,6 +36,7 @@ import backtest
 import build_clubs_json
 import calibrate_matchup
 import draft_lineup
+import fetch_master_list
 import sklw_lineup
 import sklw_matchup
 
@@ -291,6 +292,30 @@ class FindSolioCsvFreshnessTests(unittest.TestCase):
 
                 result = self._run_in(cwd_dir, home, mod)
                 self.assertEqual(result, Path("solio.csv"), mod.__name__)
+
+
+class FetchMasterListTests(unittest.TestCase):
+    """fetch_master_list.py pulls a Google Sheet tab via its public CSV
+    export URL. If the sheet isn't actually shared publicly, Google
+    serves an HTML sign-in page instead (usually still HTTP 200, not an
+    error) -- this must be caught explicitly rather than silently
+    writing garbage HTML into what's supposed to be a CSV file."""
+
+    def test_html_response_is_detected_and_rejected(self):
+        fake_response = mock.Mock()
+        fake_response.text = "<!DOCTYPE html><html><body>Sign in</body></html>"
+        fake_response.raise_for_status = mock.Mock()
+        with mock.patch("fetch_master_list.requests.get", return_value=fake_response):
+            with self.assertRaises(SystemExit):
+                fetch_master_list.fetch_tab_csv("sheet123", "456")
+
+    def test_real_csv_response_passes_through(self):
+        fake_response = mock.Mock()
+        fake_response.text = "tab,team_group,handle,fpl_id,fpl_team_name,manager_name\nM1,Club A,@x,1,Team,Name\n"
+        fake_response.raise_for_status = mock.Mock()
+        with mock.patch("fetch_master_list.requests.get", return_value=fake_response):
+            result = fetch_master_list.fetch_tab_csv("sheet123", "456")
+        self.assertIn("Club A", result)
 
 
 class ClubsJsonTests(unittest.TestCase):
