@@ -737,20 +737,81 @@ probability:
   vs. realized frequency for each of the 9 lowest scorelines plus
   "other".
 
-Sample run (`--trials 300 --inner-sims 150`, smaller than the 1200/300
-default for a quick check): multiclass Brier 0.96, with the pooled
-bucket check showing real overconfidence in the 10-30% predicted range
-(23.2% predicted vs. 9.6% realized in the 20-30% bucket) — a genuine,
+Full-size run (`--trials 1200 --inner-sims 300`, the default): win
+Brier 0.1930 (consistent with the win/loss-only numbers above),
+multiclass Brier 0.9501. The pooled bucket check showed real
+overconfidence in the 10-30% predicted range (e.g. the 20-30% bucket:
+610 data points, 23.1% predicted vs. 13.9% realized) — a genuine,
 previously invisible miscalibration the win/loss-only check couldn't
 have caught, since a scoreline can be wrong in a way that doesn't flip
-who wins. The common-scoreline table also showed 1-0/0-1 (thin
-one-goal-margin Strikers wins) predicted somewhat more often than they
-actually occurred. Worth a full-size run (`--trials 1200 --inner-sims
-300`, the default) before treating these numbers as settled — this was
-a reduced-size smoke test to confirm the mechanism works end-to-end.
+who wins. The common-scoreline table showed the model under-predicting
+"other" (41.7% predicted vs. 50.8% realized) and over-predicting each
+of 1-0/0-1/2-0/0-2 by roughly 2-2.5 percentage points — real scorelines
+are more spread out (more goals, more varied margins) than the
+simulation produces.
+
+**Is that just uniform under-dispersion?** Tested directly with a
+`--variance-scale` multiplier (`simulate_member_score`'s
+`variance_scale` parameter, default 1.0 = unchanged behavior) applied
+to every resampled residual before it's added to a player's xP, and a
+`--variance-scale-sweep S1,S2,...` flag that reruns the *same* built
+trials at each scale (same trick as `backtest.py`'s k-sweep — isolates
+the scale's effect from trial-to-trial randomness) and reports win
+Brier, multiclass Brier, the win-probability "extremes gap" (average
+miscalibration in the 0-10% / 90-100% predicted-probability buckets),
+and the "other"-scoreline gap for each. If a single scale minimized
+all four at once, that would be strong evidence the simulation is
+simply under-dispersed everywhere. It doesn't:
+
+```
+ scale   win Brier   multiclass Brier   extremes gap   other-bucket gap
+  0.80      0.1772             0.9735           6.0%              20.6%
+  1.00      0.1730             0.9503           2.3%              14.6%
+  1.20      0.1737             0.9499           4.2%               8.8%
+  1.40      0.1737             0.9419           3.8%               3.4%
+  1.60      0.1770             0.9424           5.4%               1.7%
+  1.80      0.1777             0.9455           4.0%               6.1%
+  2.00      0.1795             0.9500           7.8%              10.3%
+```
+(`--trials 500 --inner-sims 150 --variance-scale-sweep
+"0.8,1.0,1.2,1.4,1.6,1.8,2.0"`; a smaller sweep at `--trials 200
+--inner-sims 100` showed the identical pattern.)
+
+Win/loss accuracy (win Brier, extremes gap) is best right at the
+current default, scale=1.0, and gets steadily *worse* past it.
+Scoreline-spread accuracy (the "other"-bucket gap) keeps improving well
+past 1.0, bottoming out around 1.4-1.6, before getting worse again.
+There's no scale that's good at both — ruling out plain uniform
+under-dispersion as the explanation. Also ruled out: the test season
+(2023-24) being intrinsically more volatile than the training season
+(2022-23) — it's actually the opposite (lower per-position residual
+stdev in every one of GK/DEF/MID/FWD), so the model already imports
+*more* spread than the test season's own data would suggest and still
+under-spreads scorelines. The real cause is something more structural
+than a single knob can reach — most likely the strength of cross-player
+correlation (same-team, same-manager-squad, or both) rather than each
+player's individual variance. `--variance-scale` and
+`--variance-scale-sweep` are kept as a documented diagnostic (default
+behavior unchanged); this is a live known gap, not a fixed one — see
+"Known gaps" below.
+
+Bottom line for using this project day-to-day: **win/loss probabilities
+are reliably calibrated; exact scorelines are directionally right but
+mildly under-spread** (real matches land on rarer, higher-margin
+scorelines slightly more often than the simulation predicts). Treat any
+single scoreline probability as approximate.
 
 ## Known gaps / next steps
 
+- Exact scoreline predictions are mildly under-spread (see the
+  scoreline-calibration section above) — win/loss is reliably
+  calibrated, but real matches land on rarer/higher-margin scorelines a
+  bit more often than simulated. Ruled out plain uniform under-dispersion
+  (a `--variance-scale` sweep found no single scale that's simultaneously
+  best for win/loss accuracy and scoreline-spread accuracy) and ruled out
+  the test season being unusually volatile (it's less volatile than
+  training, if anything). Likely cause is under-modeled cross-player
+  correlation strength rather than per-player variance; not yet fixed.
 - No `docs/rules.md` yet — this README doubles as the rules reference for
   now. Paste in the original rules doc there if/when available.
 - `ep_next` (FPL's own expected-points field) is a decent free signal but

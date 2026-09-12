@@ -659,6 +659,91 @@ class PredictedScoreDistributionTests(unittest.TestCase):
         self.assertGreater(len(dist), 0)
 
 
+class VarianceScaleTests(unittest.TestCase):
+    """variance_scale was added to test one specific diagnosis for the
+    scoreline under-spread found by ScorelineDistributionCalibrationTests:
+    is the simulation simply under-dispersed overall? A sweep across real
+    2022-23/2023-24 data (see README) found NO scale that minimizes both
+    win-probability Brier and scoreline-spread metrics at once -- win Brier
+    is best at scale=1.0 and gets worse above it, while scoreline-spread
+    keeps improving well past 1.0. That rules out plain uniform
+    under-dispersion; the gap is something more structural. --variance-scale
+    stays available (default 1.0, unchanged behavior) as a documented
+    diagnostic, not a live fix. These tests just lock in the plumbing."""
+
+    def _member(self, seed_xp=5.0):
+        return {"xps": [seed_xp] * 11, "positions": ["GK"] + ["DEF"] * 4 + ["MID"] * 4 + ["FWD"] * 2,
+                "teams": ["TeamA"] * 11, "captain_idx": 0}
+
+    def test_scale_one_matches_default_behavior(self):
+        rng1 = random.Random(7)
+        rng2 = random.Random(7)
+        member = self._member()
+        team_shocks = {"TeamA": 1}
+        team_gw_residuals = {("TeamA", 1): {"GK": [1.0, -1.0], "DEF": [1.0, -1.0],
+                                             "MID": [1.0, -1.0], "FWD": [1.0, -1.0]}}
+        fallback = team_gw_residuals[("TeamA", 1)]
+        default_score = calibrate_matchup.simulate_member_score(rng1, member, team_shocks,
+                                                                  team_gw_residuals, fallback)
+        explicit_score = calibrate_matchup.simulate_member_score(rng2, member, team_shocks,
+                                                                   team_gw_residuals, fallback,
+                                                                   variance_scale=1.0)
+        self.assertEqual(default_score, explicit_score)
+
+    def test_larger_scale_widens_the_residual_contribution(self):
+        # Single-element residual pools make rng.choice deterministic (always
+        # 2.0), so the effect of variance_scale is exact and checkable:
+        # each of the 11 positions gets xp + 2.0*scale, and the captain's
+        # slot (index 0) is doubled again -- total = 12 * (xp + 2.0*scale).
+        member = self._member()
+        team_shocks = {"TeamA": 1}
+        team_gw_residuals = {("TeamA", 1): {"GK": [2.0], "DEF": [2.0], "MID": [2.0], "FWD": [2.0]}}
+        fallback = team_gw_residuals[("TeamA", 1)]
+        base = calibrate_matchup.simulate_member_score(random.Random(1), member, team_shocks,
+                                                         team_gw_residuals, fallback, variance_scale=1.0)
+        scaled = calibrate_matchup.simulate_member_score(random.Random(1), member, team_shocks,
+                                                           team_gw_residuals, fallback, variance_scale=2.0)
+        self.assertAlmostEqual(scaled - base, 12 * 2.0 * (2.0 - 1.0), places=6)
+
+    def test_predicted_score_distribution_accepts_variance_scale(self):
+        club1 = [self._member() for _ in range(16)]
+        club2 = [self._member() for _ in range(16)]
+        roles1 = calibrate_matchup.assign_roles([sum(m["xps"]) for m in club1])
+        roles2 = calibrate_matchup.assign_roles([sum(m["xps"]) for m in club2])
+        fallback = {"GK": [0.0, 1.0, -1.0], "DEF": [0.0, 1.0, -1.0],
+                    "MID": [0.0, 1.0, -1.0], "FWD": [0.0, 1.0, -1.0]}
+        team_gw_residuals = {("TeamA", 1): fallback}
+        team_gw_index = {"TeamA": [1]}
+        rng = random.Random(1)
+        dist = calibrate_matchup.predicted_score_distribution(
+            rng, club1, roles1, club2, roles2, team_gw_residuals, team_gw_index, fallback,
+            200, variance_scale=1.5)
+        self.assertAlmostEqual(sum(dist.values()), 1.0, places=9)
+
+    def test_run_variance_scale_sweep_prints_one_row_per_scale(self):
+        member = self._member()
+        club1 = [member for _ in range(16)]
+        club2 = [member for _ in range(16)]
+        roles1 = calibrate_matchup.assign_roles([sum(m["xps"]) for m in club1])
+        roles2 = calibrate_matchup.assign_roles([sum(m["xps"]) for m in club2])
+        real = calibrate_matchup.real_outcome(
+            [{**m, "actual": sum(m["xps"])} for m in club1], roles1,
+            [{**m, "actual": sum(m["xps"])} for m in club2], roles2)
+        built_trials = [(club1, roles1, club2, roles2, real)]
+        fallback = {"GK": [0.0, 1.0, -1.0], "DEF": [0.0, 1.0, -1.0],
+                    "MID": [0.0, 1.0, -1.0], "FWD": [0.0, 1.0, -1.0]}
+        team_gw_residuals = {("TeamA", 1): fallback}
+        team_gw_index = {"TeamA": [1]}
+        rng = random.Random(1)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            calibrate_matchup.run_variance_scale_sweep(
+                rng, built_trials, team_gw_residuals, team_gw_index, fallback, 50, "0.8,1.0,1.2")
+        output = buf.getvalue()
+        for scale in ("0.80", "1.00", "1.20"):
+            self.assertIn(scale, output)
+
+
 class BacktestMethodCTests(unittest.TestCase):
     """assign_method_c (GK-by-floor, Strikers-by-ceiling) was tested
     against real historical data and REJECTED -- it never beat method B

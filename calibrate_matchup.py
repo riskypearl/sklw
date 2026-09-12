@@ -245,7 +245,17 @@ def pick_team_shocks(rng: random.Random, teams_needed: set[str],
 
 def simulate_member_score(rng: random.Random, member: dict, team_shocks: dict[str, int | None],
                            team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
-                           fallback_residuals: dict[str, list[float]]) -> float:
+                           fallback_residuals: dict[str, list[float]],
+                           variance_scale: float = 1.0) -> float:
+    """variance_scale: multiplies every resampled residual before adding
+    it to xp -- 1.0 (default) reproduces the plain bootstrap exactly.
+    Exists to test a specific diagnosis directly: does the SIMULATED
+    outcome distribution have too little spread overall (in which case
+    a single inflation factor should improve BOTH the win-probability
+    overconfidence-at-extremes pattern AND the scoreline under-spread
+    pattern at once), rather than a structural correlation gap (which a
+    single scalar couldn't fix). See --variance-scale-sweep in main()
+    and the README's calibration section for the result."""
     total = 0.0
     for i, (xp, pos, team) in enumerate(zip(member["xps"], member["positions"], member["teams"])):
         shock_gw = team_shocks.get(team)
@@ -254,7 +264,7 @@ def simulate_member_score(rng: random.Random, member: dict, team_shocks: dict[st
             pool = team_gw_residuals.get((team, shock_gw), {}).get(pos)
         if not pool:  # team unknown this season, or no player at this position that GW
             pool = fallback_residuals[pos]
-        score = xp + rng.choice(pool)
+        score = xp + rng.choice(pool) * variance_scale
         if i == member["captain_idx"]:
             score *= 2
         total += score
@@ -266,7 +276,7 @@ def predicted_score_distribution(rng: random.Random, club1: list[dict], roles1: 
                                   team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
                                   team_gw_index: dict[str, list[int]],
                                   fallback_residuals: dict[str, list[float]],
-                                  inner_sims: int) -> dict[tuple[int, int], float]:
+                                  inner_sims: int, variance_scale: float = 1.0) -> dict[tuple[int, int], float]:
     """The full simulated joint distribution over exact (g1, g2)
     scorelines for one matchup -- win probability is just this summed
     over the g1 > g2 cells, but the full distribution is what actually
@@ -281,9 +291,9 @@ def predicted_score_distribution(rng: random.Random, club1: list[dict], roles1: 
     counts: Counter[tuple[int, int]] = Counter()
     for _ in range(inner_sims):
         team_shocks = pick_team_shocks(rng, teams_needed, team_gw_index)
-        scores1 = [simulate_member_score(rng, m, team_shocks, team_gw_residuals, fallback_residuals)
+        scores1 = [simulate_member_score(rng, m, team_shocks, team_gw_residuals, fallback_residuals, variance_scale)
                    for m in club1]
-        scores2 = [simulate_member_score(rng, m, team_shocks, team_gw_residuals, fallback_residuals)
+        scores2 = [simulate_member_score(rng, m, team_shocks, team_gw_residuals, fallback_residuals, variance_scale)
                    for m in club2]
         g1 = match_goals(scores1, roles1, scores2, roles2)
         g2 = match_goals(scores2, roles2, scores1, roles1)
@@ -299,6 +309,69 @@ def real_outcome(club1: list[dict], roles1: dict, club2: list[dict], roles2: dic
     return g1, g2
 
 
+def run_variance_scale_sweep(rng: random.Random,
+                              built_trials: list[tuple[list[dict], dict, list[dict], dict, tuple[int, int]]],
+                              team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
+                              team_gw_index: dict[str, list[int]],
+                              fallback_residuals: dict[str, list[float]],
+                              inner_sims: int, sweep_spec: str) -> None:
+    """Tests whether a single variance_scale improves BOTH the win-
+    probability overconfidence-at-extremes pattern AND the scoreline
+    under-spread pattern at once -- evidence for "the simulation is
+    generally under-dispersed" if so, since a structural correlation
+    gap couldn't be fixed by one scalar applied uniformly everywhere."""
+    scales = [float(s.strip()) for s in sweep_spec.split(",") if s.strip()]
+    n = len(built_trials)
+    print(f"\n=== Variance-scale sweep ({n} trials, same synthetic clubs "
+          f"reused across every scale) ===")
+    print(f"{'scale':>6}  {'win Brier':>10}  {'multiclass Brier':>17}  {'extremes gap':>13}  {'other-bucket gap':>17}")
+
+    for scale in scales:
+        records: list[tuple[float, bool]] = []
+        score_records: list[tuple[dict[tuple[int, int], float], tuple[int, int]]] = []
+        for club1, roles1, club2, roles2, (g1, g2) in built_trials:
+            pred_dist = predicted_score_distribution(rng, club1, roles1, club2, roles2,
+                                                       team_gw_residuals, team_gw_index,
+                                                       fallback_residuals, inner_sims, scale)
+            pred = sum(p for (pg1, pg2), p in pred_dist.items() if pg1 > pg2)
+            records.append((pred, g1 > g2))
+            score_records.append((pred_dist, (g1, g2)))
+
+        win_brier = statistics.mean((p - (1.0 if w else 0.0)) ** 2 for p, w in records)
+        multiclass_brier = statistics.mean(
+            sum(p * p for p in pred_dist.values()) - 2 * pred_dist.get(real, 0.0) + 1.0
+            for pred_dist, real in score_records)
+
+        # "Extremes gap": overconfidence at the top/bottom win-probability
+        # deciles, the SAME pattern noted throughout this project's
+        # calibration history -- average |predicted - realized| across
+        # the 0-10% and 90-100% buckets only.
+        extreme_gaps = []
+        for lo, hi in [(0.0, 0.1), (0.9, 1.0)]:
+            bucket = [(p, w) for p, w in records if lo <= p < hi or (hi == 1.0 and p == 1.0)]
+            if bucket:
+                realized = sum(1 for _, w in bucket if w) / len(bucket)
+                avg_pred = statistics.mean(p for p, _ in bucket)
+                extreme_gaps.append(abs(avg_pred - realized))
+        extremes_gap = statistics.mean(extreme_gaps) if extreme_gaps else float("nan")
+
+        common = [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (0, 2), (2, 1), (1, 2), (2, 2)]
+        other_pred = statistics.mean(
+            1.0 - sum(pred_dist.get(s, 0.0) for s in common) for pred_dist, _ in score_records)
+        other_real = sum(1 for _, real in score_records if real not in common) / n
+        other_gap = abs(other_pred - other_real)
+
+        print(f"{scale:>6.2f}  {win_brier:>10.4f}  {multiclass_brier:>17.4f}  "
+              f"{100*extremes_gap:>12.1f}%  {100*other_gap:>16.1f}%")
+
+    print(f"\nLower is better across all four columns. If one scale minimizes "
+          f"(or comes close to minimizing) BOTH Brier scores AND both gap "
+          f"columns together, that's real evidence the simulation is "
+          f"generally under-dispersed rather than missing a specific "
+          f"correlation structure -- inflating variance uniformly wouldn't "
+          f"fix a structural gap, only a genuine overall shortfall.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--train-season", default="2022-23",
@@ -312,6 +385,22 @@ def main():
                      help="Monte Carlo simulations per matchup for the predicted probability "
                           "(same role sklw_matchup.py's --sims plays live)")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--variance-scale", type=float, default=1.0,
+                     help="multiplies every resampled residual before adding "
+                          "it to xp -- 1.0 (default) is the plain bootstrap, "
+                          "unchanged from before this flag existed.")
+    ap.add_argument("--variance-scale-sweep", metavar="S1,S2,...",
+                     help="instead of a single run, test several "
+                          "--variance-scale values against the SAME "
+                          "synthetic trials (fair comparison, same idea as "
+                          "backtest.py's k-sweep) and report win-probability "
+                          "Brier + multiclass scoreline Brier + the 'other' "
+                          "bucket gap for each -- built to test one specific "
+                          "diagnosis: is the simulated outcome distribution "
+                          "under-dispersed overall (in which case a single "
+                          "scale improves both metrics at once), rather than "
+                          "a structural correlation gap (which it couldn't "
+                          "fix). Overrides --variance-scale.")
     args = ap.parse_args()
 
     if args.train_season == args.test_season:
@@ -338,8 +427,12 @@ def main():
     rng = random.Random(args.seed)
     target_gws = list(range(1, 39))
 
-    records: list[tuple[float, bool, bool]] = []  # (predicted_win_prob, real_win, real_draw)
-    score_records: list[tuple[dict[tuple[int, int], float], tuple[int, int]]] = []  # (pred_dist, real_scoreline)
+    # Build the synthetic clubs/roles/real-outcomes ONCE, independent of
+    # variance_scale -- so a --variance-scale-sweep compares different
+    # scales against the EXACT SAME trials (same reasoning as
+    # backtest.py's k-sweep: isolates the effect of the scale itself,
+    # not random draw variation between trials).
+    built_trials: list[tuple[list[dict], dict, list[dict], dict, tuple[int, int]]] = []
     for _ in range(args.trials):
         target_gw = rng.choice(target_gws)
         eligible = {eid: e for eid, e in history.items() if target_gw in e["by_gw"]}
@@ -356,12 +449,21 @@ def main():
         club2 = build_club(rng, eligible_by_pos, eligible, target_gw)
         roles1 = assign_roles([m["projected"] for m in club1])
         roles2 = assign_roles([m["projected"] for m in club2])
+        real = real_outcome(club1, roles1, club2, roles2)
+        built_trials.append((club1, roles1, club2, roles2, real))
 
+    if args.variance_scale_sweep:
+        run_variance_scale_sweep(rng, built_trials, team_gw_residuals, team_gw_index,
+                                  fallback_residuals, args.inner_sims, args.variance_scale_sweep)
+        return
+
+    records: list[tuple[float, bool, bool]] = []  # (predicted_win_prob, real_win, real_draw)
+    score_records: list[tuple[dict[tuple[int, int], float], tuple[int, int]]] = []  # (pred_dist, real_scoreline)
+    for club1, roles1, club2, roles2, (g1, g2) in built_trials:
         pred_dist = predicted_score_distribution(rng, club1, roles1, club2, roles2,
                                                   team_gw_residuals, team_gw_index,
-                                                  fallback_residuals, args.inner_sims)
-        pred = sum(p for (g1, g2), p in pred_dist.items() if g1 > g2)
-        g1, g2 = real_outcome(club1, roles1, club2, roles2)
+                                                  fallback_residuals, args.inner_sims, args.variance_scale)
+        pred = sum(p for (pg1, pg2), p in pred_dist.items() if pg1 > pg2)
         records.append((pred, g1 > g2, g1 == g2))
         score_records.append((pred_dist, (g1, g2)))
 
