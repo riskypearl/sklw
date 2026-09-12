@@ -111,11 +111,16 @@ def do_fetch(sheet_id: str, out_path: Path):
             # home page -> the actual doc, same path a human takes,
             # THEN request the export from within that same session.
             print("Opening Google Sheets, then the document, before requesting the export...")
-            page.goto("https://docs.google.com/spreadsheets/")
-            page.wait_for_load_state("networkidle")
-            page.goto(edit_url)
-            page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(3_000)  # let the doc actually finish rendering
+            # "networkidle" never actually fires on Google's own apps --
+            # they keep background connections (polling, websockets)
+            # open indefinitely, so waiting for network idle just hangs
+            # until Playwright's timeout, aborting before ever reaching
+            # the document. Use "load" (the page's own load event) plus
+            # a fixed pause instead -- confirmed live this was the bug.
+            page.goto("https://docs.google.com/spreadsheets/", wait_until="load")
+            page.wait_for_timeout(3_000)
+            page.goto(edit_url, wait_until="load")
+            page.wait_for_timeout(5_000)  # let the doc actually finish rendering
             if "You need access" in page.content() or "you need access" in page.title().lower():
                 print("Opening the document itself already shows an access-denied "
                       "page -- this account genuinely isn't shared on it yet. "
