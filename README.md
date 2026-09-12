@@ -505,15 +505,20 @@ python build_clubs_json.py SKLW_master_list.csv
 This reads the league's own master roster CSV (columns: `tab,
 team_group, handle, fpl_id, fpl_team_name, manager_name` — one row per
 manager, `team_group` is the club name) and writes `clubs.json`:
-`{"Club Name": {"Manager1": id, "Manager2": id, ...}, ...}` — generic
-placeholder labels only, every handle/team-name/real-name column is
-dropped entirely. **`clubs.json` (and any `SKLW_master_list*.csv`) is
-in `.gitignore` and must never be committed** — the master list has
-real FPL IDs for hundreds of managers across the whole league, not just
-your own club or a single opponent, which is exactly the kind of data
-this project has been careful to keep out of this public repo even for
-one opponent. `build_clubs_json.py` itself (pure conversion logic, no
-personal data) is safe to commit and share. `--opponent` does a
+`{"Club Name": {"@handle": id, ...}, ...}` — IDs + handle (or, if a row
+has no usable handle, the FPL team name) are considered fine to be
+public; `manager_name` (real/government name) is dropped
+unconditionally and never appears in the output, public repo or not.
+Some rows on the real master list turned out to have no proper @handle
+at all — just the manager's real name typed into the handle column
+instead — so this is guarded explicitly, not just by dropping the
+`manager_name` column: any candidate label that exactly matches that
+row's own `manager_name` is skipped in favour of the next fallback
+(`fpl_team_name`, then a generic `ManagerN` placeholder if even that
+matches). `clubs.json` and `build_clubs_json.py` are both safe to
+commit; the raw `SKLW_master_list*.csv` stays in `.gitignore` and
+should never be committed itself, since `manager_name` sits right there
+in plain columns for every manager league-wide. `--opponent` does a
 case-insensitive substring match against club names in `clubs.json` and
 errors clearly (listing all known clubs) if it's missing, matches more
 than one, or matches none — never a silent guess. `--clubs-file path`

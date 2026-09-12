@@ -4,17 +4,20 @@ Standalone script, separate from sklw_lineup.py/sklw_matchup.py. Reads a
 CSV with columns (tab, team_group, handle, fpl_id, fpl_team_name,
 manager_name) -- the shape of SKLW's own master roster export covering
 every club in the league -- and writes clubs.json: {"Club Name":
-{"Manager1": fpl_id, "Manager2": fpl_id, ...}, ...}.
+{"@handle": fpl_id, ...}, ...}.
 
-Deliberately drops handle/fpl_team_name/manager_name entirely and
-replaces each manager with a generic "ManagerN" label. clubs.json maps
-real FPL entry IDs for potentially hundreds of real people across the
-whole league (everyone else's club rosters, not just your own or a
-single opponent's) -- that's exactly the kind of data this project has
-been careful NOT to commit to this public repo even for a single
-opponent, so this script's OUTPUT is listed in .gitignore. The script
-itself (no personal data, just conversion logic) is safe to commit and
-share.
+Keeps the handle (or, if a row has no usable handle, the FPL team name)
+as each manager's label -- readable output, matches what's actually on
+the sheet -- but drops manager_name (real/government name)
+unconditionally, public repo or not; that's a hard line regardless of
+who can see this data. IDs + handles/team names are fine to be public;
+real names never are. Some rows on the real master list have no proper
+@handle and just have the manager's real name typed into the handle
+column instead -- guarded against explicitly (see _label_for): any
+candidate that exactly matches that row's own manager_name is skipped,
+falling through to fpl_team_name and then a generic "ManagerN"
+placeholder if even that matches. clubs.json (and this script) are both
+safe to commit.
 
 Usage:
     python build_clubs_json.py SKLW_master_list.csv
@@ -35,8 +38,25 @@ from collections import defaultdict
 from pathlib import Path
 
 
+def _label_for(row: dict, fallback_index: int) -> str:
+    """Handle first, then FPL team name, then a generic placeholder as a
+    last resort -- never manager_name (real/government name). Some rows
+    on the real sheet have no proper @handle and someone just typed the
+    manager's real name into that column instead (confirmed against a
+    real master list: e.g. handle=='Tom Mitcham', manager_name=='Tom
+    Mitcham') -- so any candidate that exactly matches manager_name
+    (case/whitespace-insensitive) is skipped, not just the manager_name
+    column itself."""
+    real_name = (row.get("manager_name") or "").strip().casefold()
+    for candidate in (row.get("handle"), row.get("fpl_team_name")):
+        candidate = (candidate or "").strip()
+        if candidate and candidate.casefold() != real_name:
+            return candidate
+    return f"Manager{fallback_index}"
+
+
 def build_clubs(csv_path: Path) -> dict[str, dict[str, int]]:
-    by_club: dict[str, list[int]] = defaultdict(list)
+    by_club: dict[str, list[tuple[str, int]]] = defaultdict(list)
     with csv_path.open(newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         required = {"team_group", "fpl_id"}
@@ -45,18 +65,24 @@ def build_clubs(csv_path: Path) -> dict[str, dict[str, int]]:
                   f"{required - set(reader.fieldnames or [])}. Expected a "
                   f"header with at least 'team_group' and 'fpl_id'.")
             sys.exit(1)
-        for row in reader:
+        for i, row in enumerate(reader, 1):
             club = row["team_group"].strip()
             try:
                 fpl_id = int(row["fpl_id"].strip())
             except (ValueError, KeyError):
                 continue
             if club:
-                by_club[club].append(fpl_id)
+                by_club[club].append((_label_for(row, i), fpl_id))
 
     clubs: dict[str, dict[str, int]] = {}
-    for club, ids in by_club.items():
-        clubs[club] = {f"Manager{i}": mid for i, mid in enumerate(ids, 1)}
+    for club, entries in by_club.items():
+        managers: dict[str, int] = {}
+        seen: dict[str, int] = defaultdict(int)
+        for label, mid in entries:
+            seen[label] += 1
+            key = label if seen[label] == 1 else f"{label} ({seen[label]})"
+            managers[key] = mid
+        clubs[club] = managers
     return clubs
 
 

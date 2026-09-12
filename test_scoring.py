@@ -463,11 +463,10 @@ class FetchMasterListTests(unittest.TestCase):
 
 class ClubsJsonTests(unittest.TestCase):
     """build_clubs_json.py converts the league master list CSV into
-    clubs.json (club name -> generic-labeled 16-manager roster, no real
-    names/handles -- see that script's docstring for why), and
-    sklw_matchup.py's --opponent flag looks a club up from it. All
-    synthetic data here -- no real manager IDs -- since clubs.json
-    itself is deliberately kept out of git."""
+    clubs.json (club name -> handle/team-name-labeled 16-manager roster
+    -- real/government names always stripped, see that script's
+    docstring for why), and sklw_matchup.py's --opponent flag looks a
+    club up from it. All synthetic data here -- no real manager IDs."""
 
     def _write_csv(self, path):
         path.write_text(
@@ -477,19 +476,66 @@ class ClubsJsonTests(unittest.TestCase):
             "M1,Club Beta,@b1,333,Team B1,Carol\n"
         )
 
-    def test_build_clubs_strips_names_keeps_ids(self):
+    def test_build_clubs_keeps_handles_strips_real_names(self):
         with tempfile.TemporaryDirectory() as d:
             csv_path = Path(d) / "master.csv"
             self._write_csv(csv_path)
             clubs = build_clubs_json.build_clubs(csv_path)
         self.assertEqual(clubs, {
-            "Club Alpha": {"Manager1": 111, "Manager2": 222},
-            "Club Beta": {"Manager1": 333},
+            "Club Alpha": {"@a1": 111, "@a2": 222},
+            "Club Beta": {"@b1": 333},
         })
-        # no real names, handles, or team names anywhere in the output
+        # real names never leak into the output; handles are kept
         dumped = str(clubs)
-        for leaked in ("Alice", "Bob", "Carol", "@a1", "Team A1"):
+        for leaked in ("Alice", "Bob", "Carol"):
             self.assertNotIn(leaked, dumped)
+        for kept in ("@a1", "@a2", "@b1"):
+            self.assertIn(kept, dumped)
+
+    def test_build_clubs_falls_back_to_team_name_when_handle_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            csv_path = Path(d) / "master.csv"
+            csv_path.write_text(
+                "tab,team_group,handle,fpl_id,fpl_team_name,manager_name\n"
+                "M1,Club Alpha,,111,Team A1,Alice\n"
+            )
+            clubs = build_clubs_json.build_clubs(csv_path)
+        self.assertEqual(clubs, {"Club Alpha": {"Team A1": 111}})
+
+    def test_build_clubs_skips_handle_that_is_actually_the_real_name(self):
+        """Found against a real master list: some rows have no proper
+        @handle and the sheet just has the manager's real name typed
+        into the handle column instead (handle == manager_name exactly).
+        Must fall back to fpl_team_name rather than leak it."""
+        with tempfile.TemporaryDirectory() as d:
+            csv_path = Path(d) / "master.csv"
+            csv_path.write_text(
+                "tab,team_group,handle,fpl_id,fpl_team_name,manager_name\n"
+                "M1,Club Alpha,Tom Mitcham,111,Milambo No. 5,Tom Mitcham\n"
+            )
+            clubs = build_clubs_json.build_clubs(csv_path)
+        self.assertEqual(clubs, {"Club Alpha": {"Milambo No. 5": 111}})
+
+    def test_build_clubs_falls_back_to_generic_when_everything_is_the_real_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            csv_path = Path(d) / "master.csv"
+            csv_path.write_text(
+                "tab,team_group,handle,fpl_id,fpl_team_name,manager_name\n"
+                "M1,Club Alpha,Tom Mitcham,111,Tom Mitcham,Tom Mitcham\n"
+            )
+            clubs = build_clubs_json.build_clubs(csv_path)
+        self.assertEqual(clubs, {"Club Alpha": {"Manager1": 111}})
+
+    def test_build_clubs_dedupes_repeated_labels(self):
+        with tempfile.TemporaryDirectory() as d:
+            csv_path = Path(d) / "master.csv"
+            csv_path.write_text(
+                "tab,team_group,handle,fpl_id,fpl_team_name,manager_name\n"
+                "M1,Club Alpha,@dupe,111,Team A1,Alice\n"
+                "M1,Club Alpha,@dupe,222,Team A2,Bob\n"
+            )
+            clubs = build_clubs_json.build_clubs(csv_path)
+        self.assertEqual(clubs, {"Club Alpha": {"@dupe": 111, "@dupe (2)": 222}})
 
     def test_opponent_fuzzy_match_resolves_uniquely(self):
         with tempfile.TemporaryDirectory() as d:

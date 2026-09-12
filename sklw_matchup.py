@@ -491,14 +491,13 @@ def pick_team_shocks(rng: random.Random, teams_needed: set[str],
 
 def load_club_roster(clubs_path: str, club_name: str) -> dict[str, int]:
     """Looks up a club's 16-manager roster by name from a local clubs.json
-    (built by build_clubs_json.py from the league's master list, kept
-    OUT of git -- see that script and .gitignore -- since it maps real
-    FPL IDs to hundreds of other real managers across the league, not
-    just this club's own roster). Format: {"Club Name": {"Manager1":
-    id1, ...}, ...} -- generic placeholder names, no real handles/names,
-    same as an ad-hoc --them-file would use. Case-insensitive substring
-    match on club name; errors clearly (not a silent guess) if it's
-    missing, malformed, or the name doesn't match exactly one club."""
+    (built by build_clubs_json.py from the league's master list -- see
+    that script for the real-name-scrubbing rules). Format: {"Club
+    Name": {"@handle": id, ...}, ...} -- handles/team names, never real
+    names, same shape an ad-hoc --them-file would use. Case-insensitive
+    substring match on club name; errors clearly (not a silent guess) if
+    it's missing, malformed, or the name doesn't match exactly one
+    club."""
     path = Path(clubs_path)
     if not path.exists():
         print(f"ERROR: no clubs.json at {clubs_path} -- run build_clubs_json.py "
