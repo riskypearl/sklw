@@ -21,15 +21,19 @@ Since this is the same Google account, running fetch_solio.py --login
 first may already leave you logged in here too -- but this script
 manages its own copy of the profile so it works standalone either way.
 
-Hitting the export URL cold (no prior normal navigation in the browser
-session) got a real "You need access" refusal even for an account that
-DOES have access -- confirmed live. Google's Sheets access checks seem
-to want to see the document opened normally first, not jumped straight
-to via its export endpoint. So the normal fetch opens Google Sheets'
-home page, then the actual document, and only requests the export
-afterwards, in that same session -- the same path a human takes,
-automated. No UI button-clicking needed beyond that (unlike Solio's
-page, which required finding a specific download button).
+Hitting the export URL cold got a real "You need access" refusal, even
+for an account that DOES have access -- confirmed live. Tried fixing it
+by having the script itself navigate home page -> document -> export
+first (same path a human takes); that still got refused at the document
+step itself. Confirmed the actual distinction live: a genuine CLICK into
+the document gets through, but an automated page.goto() straight to its
+edit URL does not, even in the exact same logged-in session -- Google's
+suspicion here keys off how the navigation happened, not just prior
+history. So, same fix category as fetch_solio.py's manual login/click
+steps: the home page is opened automatically, but clicking into the
+actual document is a manual one-time action per run (the browser stays
+open and waits for you), and only the export request afterwards is
+automated.
 
 Setup (one-time):
     pip install playwright openpyxl
@@ -41,7 +45,9 @@ Setup (one-time):
 
 Normal use:
     python fetch_sheet_workbook.py --sheet-id <SHEET_ID>
-        (downloads the whole workbook, saves as sheet_workbook.xlsx)
+        (opens the Sheets home page -- click into the SKLW sheet
+        yourself, press Enter once you can see it open, and the rest
+        downloads automatically as sheet_workbook.xlsx)
 
 <SHEET_ID> is the long ID in the sheet's URL
 (.../spreadsheets/d/<SHEET_ID>/...) -- same sheet fetch_master_list.py
@@ -97,36 +103,29 @@ def do_fetch(sheet_id: str, out_path: Path):
         print(f"No saved session at {PROFILE_DIR} -- run with --login first.")
         return
 
-    edit_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
     export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
     with sync_playwright() as p:
         context = _launch_context(p, headless=False)
         page = context.new_page()
         try:
-            # Hitting the export URL cold (no prior normal navigation in
-            # this session) got flagged and refused with a real "You
-            # need access" page even for an account that DOES have
-            # access -- confirmed live. Google's Sheets access checks
-            # seem to want to see the doc opened normally first. So:
-            # home page -> the actual doc, same path a human takes,
-            # THEN request the export from within that same session.
-            print("Opening Google Sheets, then the document, before requesting the export...")
-            # "networkidle" never actually fires on Google's own apps --
-            # they keep background connections (polling, websockets)
-            # open indefinitely, so waiting for network idle just hangs
-            # until Playwright's timeout, aborting before ever reaching
-            # the document. Use "load" (the page's own load event) plus
-            # a fixed pause instead -- confirmed live this was the bug.
+            # Confirmed live: even an automated page.goto() straight to
+            # the document's own edit URL (not just the export URL) gets
+            # a real "You need access" refusal, for an account that DOES
+            # have access and can open the exact same document with a
+            # real click. Google's suspicion here seems to key off HOW
+            # the navigation happened (a genuine click vs. a scripted
+            # goto), not just the account or prior page history -- so
+            # unlike the export step, this one can't be automated away.
+            # Same fix category as fetch_solio.py's manual login/click
+            # steps: make the sensitive step manual, automate the rest.
             page.goto("https://docs.google.com/spreadsheets/", wait_until="load")
-            page.wait_for_timeout(3_000)
-            page.goto(edit_url, wait_until="load")
-            page.wait_for_timeout(5_000)  # let the doc actually finish rendering
-            if "You need access" in page.content() or "you need access" in page.title().lower():
-                print("Opening the document itself already shows an access-denied "
-                      "page -- this account genuinely isn't shared on it yet. "
-                      "Nothing to do here until access is granted.")
-                context.close()
-                return
+            print("A browser window has opened on the Google Sheets home "
+                  "page. Click into the SKLW sheet yourself here (search "
+                  "for it if it's not in Recent) -- a direct automated "
+                  "jump to the document gets refused even for an account "
+                  "that has access, only a real click gets through.")
+            input("Once you can actually see the document open (tabs, cells "
+                  "visible), press Enter here...")
             print("Fetching the whole workbook (every tab, colors intact) as xlsx...")
             with page.expect_download(timeout=60_000) as download_info:
                 page.goto(export_url)
