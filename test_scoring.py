@@ -201,6 +201,41 @@ def _run_suggest_lineup(scores, fh_names=None, ceiling=None, k=0.5):
     return sections
 
 
+class ResolvePlayersTests(unittest.TestCase):
+    """resolve_players (used by --wildcard's --squad, --transfer's
+    --out/--in) hit real false-positive substring collisions in
+    practice: 'Egan' matched 'R-EGAN-Slater' too, 'Saka' matched
+    'Wan-Bis-SAKA' and '-SAKA-moto' too. Fixed with tiered matching
+    (exact surname first, falling back to substring only when nothing
+    matches exactly) -- these lock in that fix and that genuine
+    ambiguity (two real players who really do share a surname) still
+    correctly errors rather than silently picking one."""
+
+    BOOTSTRAP = {"elements": [
+        {"id": 277, "first_name": "John", "second_name": "Egan"},
+        {"id": 290, "first_name": "Regan", "second_name": "Slater"},
+        {"id": 12, "first_name": "Bukayo", "second_name": "Saka"},
+        {"id": 611, "first_name": "Aaron", "second_name": "Wan-Bissaka"},
+        {"id": 185, "first_name": "Tatsuhiro", "second_name": "Sakamoto"},
+        {"id": 154, "first_name": "Cole", "second_name": "Palmer"},
+        {"id": 301, "first_name": "Alex", "second_name": "Palmer"},
+        {"id": 567, "first_name": "Lukás", "second_name": "Hornícek"},
+    ]}
+
+    def test_surname_substring_of_another_first_name_resolves_uniquely(self):
+        self.assertEqual(sklw_lineup.resolve_players(self.BOOTSTRAP, "Egan"), [277])
+
+    def test_surname_substring_of_another_surname_resolves_uniquely(self):
+        self.assertEqual(sklw_lineup.resolve_players(self.BOOTSTRAP, "Saka"), [12])
+
+    def test_genuine_surname_ambiguity_still_errors(self):
+        with self.assertRaises(SystemExit):
+            sklw_lineup.resolve_players(self.BOOTSTRAP, "Palmer")
+
+    def test_accent_folding_still_works(self):
+        self.assertEqual(sklw_lineup.resolve_players(self.BOOTSTRAP, "Hornicek"), [567])
+
+
 class FindSolioCsvFreshnessTests(unittest.TestCase):
     """find_solio_csv() is duplicated in sklw_lineup.py/sklw_matchup.py/
     draft_lineup.py. An earlier version always preferred a local

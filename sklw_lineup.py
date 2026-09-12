@@ -657,6 +657,24 @@ def resolve_players(bootstrap: dict, fragments: str) -> list[int]:
     characters, which is unreliable in a Windows terminal) -- same
     accent-folding as load_solio_projections' name matching, via _fold().
 
+    Tiered matching, tightest first, to avoid false-positive substring
+    collisions (hit repeatedly in practice: 'Egan' matching 'R-EGAN-
+    Slater', 'Saka' matching 'Wan-Bis-SAKA' and '-SAKA-moto'):
+      1. Exact match on second_name alone (surname) -- resolves the
+         common case (typing just a surname) precisely, since a
+         surname-internal substring like 'egan' inside 'Regan' isn't an
+         EXACT surname match for anyone.
+      2. Exact match on the full 'first_name second_name' string --
+         covers a fragment that's someone's full name.
+      3. Substring search across the full name (the original, loosest
+         behavior) -- last resort, for a deliberately partial fragment
+         that isn't an exact surname or full name (e.g. 'Ronald' for
+         'Ronaldo').
+    Moves to the next tier only when the current one finds zero matches;
+    2+ exact surname matches (e.g. two real players both named exactly
+    'Palmer') is reported as genuine ambiguity rather than falling
+    through to substring, since substring could only ever widen it.
+
     Every fragment is checked before anything fails: ambiguous or
     missing matches are ALL collected and printed together in one pass,
     rather than aborting at the first bad one and making the user fix
@@ -665,8 +683,19 @@ def resolve_players(bootstrap: dict, fragments: str) -> list[int]:
     ids: list[int] = []
     for frag in [f.strip() for f in fragments.split(",") if f.strip()]:
         folded = _fold(frag)
-        matches = [p for p in bootstrap["elements"]
-                   if folded in _fold(f"{p['first_name']} {p['second_name']}")]
+        surname_exact = [p for p in bootstrap["elements"] if _fold(p["second_name"]) == folded]
+        if len(surname_exact) == 1:
+            matches = surname_exact
+        elif surname_exact:
+            matches = surname_exact  # 2+ exact surname matches: real ambiguity, report as-is
+        else:
+            full_exact = [p for p in bootstrap["elements"]
+                          if _fold(f"{p['first_name']} {p['second_name']}") == folded]
+            if full_exact:
+                matches = full_exact
+            else:
+                matches = [p for p in bootstrap["elements"]
+                           if folded in _fold(f"{p['first_name']} {p['second_name']}")]
         if len(matches) != 1:
             lines = [f"'{frag}' matched {len(matches)} players, need exactly 1:"]
             for p in matches[:10]:
