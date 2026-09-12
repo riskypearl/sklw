@@ -545,6 +545,54 @@ separate tab from the main list); repeat `--gid` to fetch several and
 concatenate them into one CSV. Chain straight into `build_clubs_json.py`
 afterwards, same as a manually-exported CSV.
 
+**Auto-filling GK/Strikers from the sheet (`fetch_sheet_workbook.py` +
+`resolve_matchup_roles.py`).** The same master workbook also has, per
+club, who's actually playing GK and Strikers each week — but that's
+only readable from the FORMATTED sheet, not a plain CSV: it's shown by
+cell background color (2 blue-filled rows = Strikers, the third,
+differently-filled row = GK), not a text label, and CSV export throws
+color away entirely. It's also on a tab ("Live Scores") that turned out
+not to be shared publicly (401'd, same as the master list), and
+fixtures are redrawn fresh every week rather than following a fixed
+schedule, so there's no way to hardcode which club plays which tab in
+advance either.
+
+Two standalone scripts handle this:
+```
+python fetch_sheet_workbook.py --login
+python fetch_sheet_workbook.py --sheet-id <SHEET_ID>
+python resolve_matchup_roles.py --our-club "Algorithm"
+```
+`fetch_sheet_workbook.py` is network-only, same login pattern as
+`fetch_solio.py` (a one-time manual Google sign-in in a real visible
+browser window, using a persistent Chrome profile reused afterwards —
+no credentials ever touch disk). Since colors matter here, it downloads
+the ENTIRE workbook as `.xlsx` (`pip install openpyxl` first) via the
+authenticated session hitting the export URL directly — xlsx keeps
+cell fill colors, CSV doesn't.
+
+`resolve_matchup_roles.py` is pure logic, no network, fully unit-tested
+against a synthetic workbook (see `test_scoring.py`): it opens "Live
+Scores" to find which `M#` tab is your club's fixture this week
+(fixtures aren't a fixed schedule, so this has to be looked up fresh
+each time), reads that tab's two clubs (whichever club's name is in the
+TOP banner occupies the LEFT-hand columns, confirmed convention), and
+within each club's 16-manager block classifies the top 3 rows by
+comparing their fill colors PAIRWISE rather than matching a specific
+hardcoded color — the two that match are Strikers, the odd one out is
+GK — so a color-scheme tweak next season doesn't silently break it.
+Handles are then resolved to FPL IDs via `clubs.json` and written
+straight into `matchup_pins.json`, the same file `sklw_matchup.py`'s
+interactive GK/Strikers prompts already save to — so a normal
+`sklw_matchup.py --opponent "..."` run afterwards picks them up
+automatically with no manual ID entry on either side.
+
+This is automated color/position parsing of someone else's spreadsheet,
+not an official export format — sanity-check the first real run's
+printed GK/Strikers names against what you can see in the sheet
+yourself before trusting it blindly, same caution as everything else
+mid-gameweek in this project.
+
 Picks up the SAME `overrides.json` `sklw_lineup.py` writes to — any
 `--wildcard`/`--transfer`/`--tc`/`--set-score` already recorded there
 applies automatically (matched by manager ID, works for either roster,

@@ -38,8 +38,16 @@ import build_clubs_json
 import calibrate_matchup
 import draft_lineup
 import fetch_master_list
+import resolve_matchup_roles
 import sklw_lineup
 import sklw_matchup
+
+try:
+    import openpyxl
+    from openpyxl.styles import PatternFill
+    HAVE_OPENPYXL = True
+except ImportError:
+    HAVE_OPENPYXL = False
 
 
 class H2HGoalsTests(unittest.TestCase):
@@ -703,6 +711,143 @@ class PredictedScoreDistributionTests(unittest.TestCase):
             rng, club1, roles1, club2, roles2, team_gw_residuals, team_gw_index, fallback, 200)
         self.assertAlmostEqual(sum(dist.values()), 1.0, places=9)
         self.assertGreater(len(dist), 0)
+
+
+@unittest.skipUnless(HAVE_OPENPYXL, "openpyxl not installed")
+class ResolveMatchupRolesTests(unittest.TestCase):
+    """resolve_matchup_roles.py parses the SKLW master sheet's per-
+    matchup tabs -- GK vs Strikers is only distinguishable by cell fill
+    color (2 alike = Strikers, the odd one out = GK), not by any text
+    label, confirmed against a real example (see README). Validated
+    end-to-end against a synthetic workbook built here before being
+    tried against the real sheet, same rigor as everything else in this
+    project after several costly wrong-guess incidents."""
+
+    BLUE = "FFADD8E6"
+    GREEN = "FFC6E0B4"
+    GRAY = "FFD9D9D9"
+    WHITE = "FFFFFFFF"
+
+    def _fill(self, hexcode):
+        return PatternFill(start_color=hexcode, end_color=hexcode, fill_type="solid")
+
+    def _build_workbook(self):
+        wb = openpyxl.Workbook()
+        live = wb.active
+        live.title = "Live Scores"
+        rows = [
+            ("M1", "Netflix & Chilwell", 0, 4, "El Sin Nombre"),
+            ("M20", "The Galacticos", 3, 0, "Algorithm & Blues"),
+        ]
+        for i, (m, a, sa, sb, b) in enumerate(rows, 1):
+            live.cell(row=i, column=1, value=m)
+            live.cell(row=i, column=2, value=a)
+            live.cell(row=i, column=3, value=sa)
+            live.cell(row=i, column=4, value=sb)
+            live.cell(row=i, column=5, value=b)
+
+        m1 = wb.create_sheet("M1")
+        m1.cell(row=1, column=1, value="Netflix & Chilwell").fill = self._fill("FFFFD9B3")
+        m1.cell(row=18, column=1, value="El Sin Nombre").fill = self._fill("FFE6B3D9")
+
+        left = (["@LewisW_FF", "@fpl_flair", "@Ad_1net"] + [f"@LSquad{i}" for i in range(11)]
+                + ["@LBench1", "@LBench2"])
+        left_fills = [self.BLUE, self.BLUE, self.WHITE] + [self.GREEN] * 11 + [self.GRAY, self.GRAY]
+        right = (["@Fplmode", "@Frankwalsh82", "@Bobbylovefpl"] + [f"@RSquad{i}" for i in range(11)]
+                 + ["@RBench1", "@RBench2"])
+        right_fills = [self.BLUE, self.BLUE, self.WHITE] + [self.GREEN] * 11 + [self.GRAY, self.GRAY]
+        for i in range(16):
+            r = 2 + i
+            m1.cell(row=r, column=1, value=left[i]).fill = self._fill(left_fills[i])
+            m1.cell(row=r, column=6, value=right[i]).fill = self._fill(right_fills[i])
+        return wb
+
+    def test_find_fixture_matches_our_club_either_row(self):
+        wb = self._build_workbook()
+        self.assertEqual(resolve_matchup_roles.find_fixture(wb, "Netflix"),
+                          ("M1", "Netflix & Chilwell", "El Sin Nombre"))
+        self.assertEqual(resolve_matchup_roles.find_fixture(wb, "algorithm"),
+                          ("M20", "Algorithm & Blues", "The Galacticos"))
+
+    def test_find_fixture_no_match_errors(self):
+        wb = self._build_workbook()
+        with self.assertRaises(SystemExit):
+            resolve_matchup_roles.find_fixture(wb, "Nonexistent Club")
+
+    def test_classify_top_three_two_alike_one_different(self):
+        entries = [("@a", self.BLUE), ("@b", self.WHITE), ("@c", self.BLUE)]
+        gk, strikers = resolve_matchup_roles._classify_top_three(entries)
+        self.assertEqual(gk, "@b")
+        self.assertEqual(sorted(strikers), ["@a", "@c"])
+
+    def test_classify_top_three_all_same_color_errors(self):
+        entries = [("@a", self.BLUE), ("@b", self.BLUE), ("@c", self.BLUE)]
+        with self.assertRaises(SystemExit):
+            resolve_matchup_roles._classify_top_three(entries)
+
+    def test_classify_top_three_all_different_colors_errors(self):
+        entries = [("@a", self.BLUE), ("@b", self.WHITE), ("@c", self.GREEN)]
+        with self.assertRaises(SystemExit):
+            resolve_matchup_roles._classify_top_three(entries)
+
+    def test_parse_matchup_sheet_left_is_top_banner_club(self):
+        wb = self._build_workbook()
+        result = resolve_matchup_roles.parse_matchup_sheet(wb, "M1")
+        self.assertEqual(result["left_club"], "Netflix & Chilwell")
+        self.assertEqual(result["right_club"], "El Sin Nombre")
+        self.assertEqual(result["left"]["gk"], "@Ad_1net")
+        self.assertEqual(sorted(result["left"]["strikers"]), ["@LewisW_FF", "@fpl_flair"])
+        self.assertEqual(len(result["left"]["squad"]), 11)
+        self.assertEqual(result["left"]["bench"], ["@LBench1", "@LBench2"])
+        self.assertEqual(result["right"]["gk"], "@Bobbylovefpl")
+        self.assertEqual(sorted(result["right"]["strikers"]), ["@Fplmode", "@Frankwalsh82"])
+
+    def test_resolve_ids_case_insensitive(self):
+        roster = {"@Ad_1net": 12}
+        self.assertEqual(resolve_matchup_roles.resolve_ids(["@ad_1net"], roster, "GK"), [12])
+
+    def test_resolve_ids_warns_and_skips_unmatched(self):
+        roster = {"@Ad_1net": 12}
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = resolve_matchup_roles.resolve_ids(["@Nobody"], roster, "GK")
+        self.assertEqual(result, [])
+        self.assertIn("not found", buf.getvalue())
+
+    def test_end_to_end_writes_expected_pins_shape(self):
+        with tempfile.TemporaryDirectory() as d:
+            wb = self._build_workbook()
+            wb_path = os.path.join(d, "wb.xlsx")
+            wb.save(wb_path)
+            clubs = {
+                "Algorithm & Blues": {"a": 1},
+                "The Galacticos": {"x": 1},
+                "Netflix & Chilwell": ({f"@LSquad{i}": 2000 + i for i in range(11)}
+                                       | {"@LewisW_FF": 10, "@fpl_flair": 11, "@Ad_1net": 12,
+                                          "@LBench1": 13, "@LBench2": 14}),
+                "El Sin Nombre": ({f"@RSquad{i}": 3000 + i for i in range(11)}
+                                  | {"@Fplmode": 1, "@Frankwalsh82": 2, "@Bobbylovefpl": 3,
+                                     "@RBench1": 4, "@RBench2": 5}),
+            }
+            clubs_path = os.path.join(d, "clubs.json")
+            Path(clubs_path).write_text(json.dumps(clubs))
+            pins_path = os.path.join(d, "pins.json")
+
+            import sys
+            old_argv = sys.argv
+            sys.argv = ["resolve_matchup_roles.py", "--workbook", wb_path,
+                        "--clubs-file", clubs_path, "--our-club", "Netflix",
+                        "--pins-file", pins_path]
+            try:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    resolve_matchup_roles.main()
+            finally:
+                sys.argv = old_argv
+
+            pins = json.loads(Path(pins_path).read_text())
+        self.assertEqual(pins["us"], {"gk_id": "12", "strikers_ids": "10,11"})
+        self.assertEqual(pins["them"]["El Sin Nombre"], {"gk_id": "3", "strikers_ids": "1,2"})
 
 
 class VarianceScaleTests(unittest.TestCase):
