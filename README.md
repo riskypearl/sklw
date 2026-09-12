@@ -495,6 +495,31 @@ entry/<ID>/...`), same as any FPL manager ID. Our own roster defaults to
 different matchup. Add `--projections solio.csv` for Solio-based
 projections instead of `ep_next` (same CSV format as `sklw_lineup.py`).
 
+**`--opponent "Club Name"`** looks the opponent's 16 managers up by club
+name from a local `clubs.json`, instead of pasting `--them-file
+opponent.json` by hand every matchup. Build `clubs.json` once (and
+re-run whenever the league's master list updates):
+```
+python build_clubs_json.py SKLW_master_list.csv
+```
+This reads the league's own master roster CSV (columns: `tab,
+team_group, handle, fpl_id, fpl_team_name, manager_name` — one row per
+manager, `team_group` is the club name) and writes `clubs.json`:
+`{"Club Name": {"Manager1": id, "Manager2": id, ...}, ...}` — generic
+placeholder labels only, every handle/team-name/real-name column is
+dropped entirely. **`clubs.json` (and any `SKLW_master_list*.csv`) is
+in `.gitignore` and must never be committed** — the master list has
+real FPL IDs for hundreds of managers across the whole league, not just
+your own club or a single opponent, which is exactly the kind of data
+this project has been careful to keep out of this public repo even for
+one opponent. `build_clubs_json.py` itself (pure conversion logic, no
+personal data) is safe to commit and share. `--opponent` does a
+case-insensitive substring match against club names in `clubs.json` and
+errors clearly (listing all known clubs) if it's missing, matches more
+than one, or matches none — never a silent guess. `--clubs-file path`
+points at a different file if you keep it somewhere other than the
+project folder.
+
 Picks up the SAME `overrides.json` `sklw_lineup.py` writes to — any
 `--wildcard`/`--transfer`/`--tc`/`--set-score` already recorded there
 applies automatically (matched by manager ID, works for either roster,

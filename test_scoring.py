@@ -23,6 +23,7 @@ projected score), Strikers get the next 2 -- not the other way around
 Run: python3 -m unittest test_scoring.py -v
 """
 import io
+import json
 import os
 import tempfile
 import time
@@ -32,6 +33,7 @@ from pathlib import Path
 from unittest import mock
 
 import backtest
+import build_clubs_json
 import calibrate_matchup
 import draft_lineup
 import sklw_lineup
@@ -289,6 +291,61 @@ class FindSolioCsvFreshnessTests(unittest.TestCase):
 
                 result = self._run_in(cwd_dir, home, mod)
                 self.assertEqual(result, Path("solio.csv"), mod.__name__)
+
+
+class ClubsJsonTests(unittest.TestCase):
+    """build_clubs_json.py converts the league master list CSV into
+    clubs.json (club name -> generic-labeled 16-manager roster, no real
+    names/handles -- see that script's docstring for why), and
+    sklw_matchup.py's --opponent flag looks a club up from it. All
+    synthetic data here -- no real manager IDs -- since clubs.json
+    itself is deliberately kept out of git."""
+
+    def _write_csv(self, path):
+        path.write_text(
+            "tab,team_group,handle,fpl_id,fpl_team_name,manager_name\n"
+            "M1,Club Alpha,@a1,111,Team A1,Alice\n"
+            "M1,Club Alpha,@a2,222,Team A2,Bob\n"
+            "M1,Club Beta,@b1,333,Team B1,Carol\n"
+        )
+
+    def test_build_clubs_strips_names_keeps_ids(self):
+        with tempfile.TemporaryDirectory() as d:
+            csv_path = Path(d) / "master.csv"
+            self._write_csv(csv_path)
+            clubs = build_clubs_json.build_clubs(csv_path)
+        self.assertEqual(clubs, {
+            "Club Alpha": {"Manager1": 111, "Manager2": 222},
+            "Club Beta": {"Manager1": 333},
+        })
+        # no real names, handles, or team names anywhere in the output
+        dumped = str(clubs)
+        for leaked in ("Alice", "Bob", "Carol", "@a1", "Team A1"):
+            self.assertNotIn(leaked, dumped)
+
+    def test_opponent_fuzzy_match_resolves_uniquely(self):
+        with tempfile.TemporaryDirectory() as d:
+            clubs_path = Path(d) / "clubs.json"
+            clubs_path.write_text(json.dumps({
+                "Fried Rice Eater": {"Manager1": 1, "Manager2": 2},
+                "Algorithm & Blues": {"Manager1": 3, "Manager2": 4},
+            }))
+            roster = sklw_matchup.load_club_roster(str(clubs_path), "Fried Rice")
+        self.assertEqual(roster, {"Manager1": 1, "Manager2": 2})
+
+    def test_opponent_ambiguous_match_errors(self):
+        with tempfile.TemporaryDirectory() as d:
+            clubs_path = Path(d) / "clubs.json"
+            clubs_path.write_text(json.dumps({
+                "Set Piece Again OLE": {"Manager1": 1},
+                "Kahn You Feel The Low Tonight": {"Manager1": 2},
+            }))
+            with self.assertRaises(SystemExit):
+                sklw_matchup.load_club_roster(str(clubs_path), "o")
+
+    def test_opponent_missing_file_errors_not_crashes(self):
+        with self.assertRaises(SystemExit):
+            sklw_matchup.load_club_roster("/nonexistent/clubs.json", "anything")
 
 
 class NeverBenchTests(unittest.TestCase):

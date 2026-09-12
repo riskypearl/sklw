@@ -489,6 +489,41 @@ def pick_team_shocks(rng: random.Random, teams_needed: set[str],
             for team in teams_needed}
 
 
+def load_club_roster(clubs_path: str, club_name: str) -> dict[str, int]:
+    """Looks up a club's 16-manager roster by name from a local clubs.json
+    (built by build_clubs_json.py from the league's master list, kept
+    OUT of git -- see that script and .gitignore -- since it maps real
+    FPL IDs to hundreds of other real managers across the league, not
+    just this club's own roster). Format: {"Club Name": {"Manager1":
+    id1, ...}, ...} -- generic placeholder names, no real handles/names,
+    same as an ad-hoc --them-file would use. Case-insensitive substring
+    match on club name; errors clearly (not a silent guess) if it's
+    missing, malformed, or the name doesn't match exactly one club."""
+    path = Path(clubs_path)
+    if not path.exists():
+        print(f"ERROR: no clubs.json at {clubs_path} -- run build_clubs_json.py "
+              f"against your league's master list CSV first (see README), "
+              f"or use --them/--them-file instead of --opponent.")
+        sys.exit(1)
+    try:
+        clubs = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        print(f"ERROR: {clubs_path} isn't valid JSON ({e}) -- rebuild it with "
+              f"build_clubs_json.py.")
+        sys.exit(1)
+    folded = club_name.strip().lower()
+    matches = [name for name in clubs if folded in name.lower()]
+    if len(matches) == 0:
+        print(f"ERROR: no club matching '{club_name}' found in {clubs_path}. "
+              f"Known clubs: {', '.join(sorted(clubs))}")
+        sys.exit(1)
+    if len(matches) > 1:
+        print(f"ERROR: '{club_name}' matched {len(matches)} clubs, need exactly 1: "
+              f"{', '.join(sorted(matches))}")
+        sys.exit(1)
+    return {str(k): int(v) for k, v in clubs[matches[0]].items()}
+
+
 def resolve_roster(spec: str | None, file_path: str | None, label: str) -> dict[str, int]:
     """Builds a {name: manager_id} roster from either --them/--us inline
     ('Name:ID,Name:ID,...') or a JSON file ({'Name': id, ...}) -- exactly
@@ -900,7 +935,18 @@ def main():
                      help="path to a JSON file {'Name': id, ...} with the "
                           "opponent club's 16 managers -- easier than "
                           "typing 16 pairs inline. Exactly one of --them/"
-                          "--them-file is required.")
+                          "--them-file/--opponent is required.")
+    ap.add_argument("--opponent", metavar="CLUB_NAME",
+                     help="look up the opponent's 16 managers by club name "
+                          "from a local clubs.json instead of pasting IDs "
+                          "by hand -- build clubs.json once with "
+                          "build_clubs_json.py against your league's "
+                          "master list CSV (see README; kept out of git, "
+                          "not committed). Case-insensitive substring "
+                          "match. Alternative to --them/--them-file.")
+    ap.add_argument("--clubs-file", default="clubs.json",
+                     help="path to clubs.json for --opponent (default: "
+                          "clubs.json in the current folder)")
     ap.add_argument("--us", metavar="NAME:ID,...",
                      help="override our own 16 managers (defaults to the "
                           "same roster as sklw_lineup.py's MANAGER_IDS)")
@@ -951,12 +997,15 @@ def main():
                           "--them-file/--us/--us-file.")
     args = ap.parse_args()
 
-    if not args.them and not args.them_file:
-        print("ERROR: need --them \"Name:ID,...\" or --them-file path.json "
-              "for the opponent club's 16 managers")
+    if not args.them and not args.them_file and not args.opponent:
+        print("ERROR: need --them \"Name:ID,...\", --them-file path.json, "
+              "or --opponent \"Club Name\" for the opponent club's 16 managers")
         sys.exit(1)
 
-    them_roster = resolve_roster(args.them, args.them_file, "them")
+    if args.opponent:
+        them_roster = load_club_roster(args.clubs_file, args.opponent)
+    else:
+        them_roster = resolve_roster(args.them, args.them_file, "them")
     us_roster = resolve_roster(args.us, args.us_file, "us") or US_MANAGER_IDS
     if len(them_roster) != 16:
         print(f"WARNING: opponent roster has {len(them_roster)} managers, expected 16")
