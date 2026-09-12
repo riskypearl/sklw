@@ -680,7 +680,8 @@ def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: 
 
 def assign_roles(club: dict[str, dict], forced_gk: str | None = None,
                   forced_strikers: set[str] | None = None,
-                  forced_bench: set[str] | None = None) -> dict[str, list[str]]:
+                  forced_bench: set[str] | None = None,
+                  fh_names: set[str] | None = None) -> dict[str, list[str]]:
     """Same rule as sklw_lineup.py's suggest_lineup: top projected -> GK,
     next 2 -> Strikers, next 11 -> Squad, rest -> Bench. GK gets priority
     over Strikers: a strong GK score is compared against BOTH of the
@@ -695,14 +696,25 @@ def assign_roles(club: dict[str, dict], forced_gk: str | None = None,
     forced_gk/forced_strikers/forced_bench: manager names KNOWN to
     actually hold that real role this week (e.g. scouted from a club's
     real declared lineup, rather than just assumed from projections) --
-    pinned regardless of projection. Whichever of the 16 aren't pinned to
-    anything are ranked as normal and fill the remaining GK (if unpinned)/
-    Striker/Squad/Bench slots. A name pinned to more than one role is
-    resolved by priority GK > Strikers > Bench (arbitrary but
-    deterministic) rather than erroring. Extra names beyond a role's
-    slot count are ignored (with a warning)."""
+    pinned regardless of projection, and take priority over fh_names
+    below (real knowledge beats an inference from chip status alone).
+    Whichever of the 16 aren't pinned to anything are ranked as normal
+    and fill the remaining GK (if unpinned)/Striker/Squad/Bench slots. A
+    name pinned to more than one role is resolved by priority GK >
+    Strikers > Bench (arbitrary but deterministic) rather than erroring.
+    Extra names beyond a role's slot count are ignored (with a warning).
+
+    fh_names: managers on Free Hit this GW, prioritized into whichever
+    of GK/Strikers isn't already filled by forced_gk/forced_strikers,
+    same order and reasoning as sklw_lineup.py's --fh (GK first, then
+    Strikers -- GK is the scarcer/more valuable individual-role slot).
+    An earlier version of this function had no FH handling at all,
+    silently letting a Free Hit manager's often-unrepresentative
+    projection land them anywhere including Bench, unlike
+    sklw_lineup.py's suggested lineup for the same real matchup."""
     forced_strikers = set(forced_strikers or [])
     forced_bench = set(forced_bench or [])
+    fh_names = set(fh_names or [])
 
     if forced_gk is not None and forced_gk not in club:
         print(f"WARNING: forced-GK name not found in this club, ignored: {forced_gk}")
@@ -727,12 +739,40 @@ def assign_roles(club: dict[str, dict], forced_gk: str | None = None,
     forced_strikers -= {forced_gk} if forced_gk else set()
     forced_bench -= ({forced_gk} if forced_gk else set()) | forced_strikers
 
+    unknown_fh = fh_names - set(club)
+    if unknown_fh:
+        print(f"WARNING: FH name(s) not found in this club, ignored: {', '.join(sorted(unknown_fh))}")
+        fh_names -= unknown_fh
+    fh_names -= forced_bench  # a real known Bench placement beats an FH guess entirely
+
+    fh_gk = None
+    fh_strikers: set[str] = set()
+    if forced_gk is None:
+        fh_gk_pool = sorted(fh_names - forced_strikers, key=lambda n: -club[n]["projected"])
+        if fh_gk_pool:
+            fh_gk = fh_gk_pool[0]
+    striker_slots_left = 2 - len(forced_strikers)
+    if striker_slots_left > 0:
+        fh_striker_pool = sorted(fh_names - forced_strikers - ({fh_gk} if fh_gk else set()),
+                                  key=lambda n: -club[n]["projected"])
+        fh_strikers = set(fh_striker_pool[:striker_slots_left])
+
     forced_all = ({forced_gk} if forced_gk else set()) | forced_strikers | forced_bench
     ranked = sorted((n for n in club if n not in forced_all), key=lambda n: -club[n]["projected"])
 
-    gk = [forced_gk] if forced_gk else [ranked.pop(0)]
+    if forced_gk:
+        gk = [forced_gk]
+    elif fh_gk:
+        gk = [fh_gk]
+        ranked.remove(fh_gk)
+    else:
+        gk = [ranked.pop(0)]
 
     strikers = list(forced_strikers)
+    if fh_strikers:
+        strikers += list(fh_strikers)
+        for n in fh_strikers:
+            ranked.remove(n)
     need = 2 - len(strikers)
     if need > 0:
         strikers += ranked[:need]
@@ -988,6 +1028,20 @@ def main():
                      help="same as --them-strikers-ids, for our own club")
     ap.add_argument("--us-bench-ids", metavar="ID,ID",
                      help="same as --them-bench-ids, for our own club")
+    ap.add_argument("--us-fh-id", action="append", metavar="ID",
+                     help="mark this of our own club members (by FPL "
+                          "manager ID, same convention as --us-gk-id "
+                          "etc.) as playing Free Hit this GW -- "
+                          "prioritized into GK first, then Strikers "
+                          "(same rule as sklw_lineup.py's --fh), ahead "
+                          "of plain projection ranking. Repeat for "
+                          "multiple managers. Beaten by an explicit "
+                          "--us-gk-id/--us-strikers-ids/--us-bench-ids "
+                          "pin for the same manager -- real scouted "
+                          "knowledge wins over an FH-based guess.")
+    ap.add_argument("--them-fh-id", action="append", metavar="ID",
+                     help="same as --us-fh-id, for an opponent manager. "
+                          "Repeat for multiple managers.")
     ap.add_argument("--no-prompt", action="store_true",
                      help="skip the interactive GK/Strikers ID prompts "
                           "below (e.g. for a non-interactive/scripted "
@@ -1139,8 +1193,10 @@ def main():
     them_forced_strikers = resolve_role_ids(args.them_strikers_ids, them_roster, "them-strikers-ids")
     us_forced_bench = resolve_role_ids(args.us_bench_ids, us_roster, "us-bench-ids")
     them_forced_bench = resolve_role_ids(args.them_bench_ids, them_roster, "them-bench-ids")
-    us_roles = assign_roles(us_club, us_forced_gk, us_forced_strikers, us_forced_bench)
-    them_roles = assign_roles(them_club, them_forced_gk, them_forced_strikers, them_forced_bench)
+    us_fh_names = resolve_role_ids(",".join(args.us_fh_id or []), us_roster, "us-fh-id")
+    them_fh_names = resolve_role_ids(",".join(args.them_fh_id or []), them_roster, "them-fh-id")
+    us_roles = assign_roles(us_club, us_forced_gk, us_forced_strikers, us_forced_bench, us_fh_names)
+    them_roles = assign_roles(them_club, them_forced_gk, them_forced_strikers, them_forced_bench, them_fh_names)
     print_roles("Us", us_club, us_roles)
     print_roles("Them", them_club, them_roles)
 

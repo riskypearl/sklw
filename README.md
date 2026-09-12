@@ -591,6 +591,17 @@ whatever's left unpinned still gets ranked as normal to fill the
 remaining slots. A name pinned to more than one role is resolved by
 priority GK > Strikers > Bench rather than erroring.
 
+`--us-fh-id "ID"` / `--them-fh-id "ID"` mark a manager as playing Free
+Hit this GW (repeatable for multiple managers) — prioritized into GK
+first, then Strikers, same rule and reasoning as `sklw_lineup.py`'s
+`--fh`. An earlier version of this tool had NO Free Hit handling at
+all, so an FH manager's often-unrepresentative projection could
+silently land them in Bench instead of getting the individual-role
+priority `sklw_lineup.py` already gives them for the same real matchup.
+Beaten by an explicit `--us-gk-id`/`--us-strikers-ids`/`--us-bench-ids`
+pin for the same manager — real scouted knowledge always wins over an
+FH-based guess.
+
 If you don't pass `--them-gk-id`/`--them-strikers-ids`/`--us-gk-id`/
 `--us-strikers-ids` on the command line, the tool interactively prompts
 for each one instead (skippable by just pressing Enter) — remembering

@@ -186,6 +186,41 @@ class RoleAssignmentPriorityTests(unittest.TestCase):
         self.assertFalse(set(roles["gk"]) & set(roles["strikers"]))
 
 
+class SklwMatchupFreeHitTests(unittest.TestCase):
+    """sklw_matchup.py's assign_roles had NO Free Hit handling at all --
+    an FH manager's often-unrepresentative projection could silently
+    land them anywhere including Bench, unlike sklw_lineup.py's
+    suggested lineup for the same real matchup. Mirrors sklw_lineup's
+    validated --fh priority: GK first, then Strikers."""
+
+    def setUp(self):
+        # m0 highest projected ... m15 lowest
+        self.club = {f"m{i}": {"projected": 100.0 - i} for i in range(16)}
+
+    def test_one_fh_manager_becomes_gk(self):
+        roles = sklw_matchup.assign_roles(self.club, fh_names={"m10"})
+        self.assertEqual(roles["gk"], ["m10"])
+        self.assertEqual(set(roles["strikers"]), {"m0", "m1"})
+
+    def test_three_fh_managers_gk_then_both_strikers(self):
+        roles = sklw_matchup.assign_roles(self.club, fh_names={"m10", "m11", "m12"})
+        self.assertEqual(roles["gk"], ["m10"])
+        self.assertEqual(set(roles["strikers"]), {"m11", "m12"})
+
+    def test_explicit_forced_gk_beats_fh(self):
+        """Real scouted knowledge (forced_gk) wins over an FH-based
+        guess -- the FH manager still gets priority for a remaining
+        Striker slot instead."""
+        roles = sklw_matchup.assign_roles(self.club, forced_gk="m5", fh_names={"m10"})
+        self.assertEqual(roles["gk"], ["m5"])
+        self.assertIn("m10", roles["strikers"])
+
+    def test_no_fh_is_unchanged_from_baseline(self):
+        roles = sklw_matchup.assign_roles(self.club)
+        self.assertEqual(roles["gk"], ["m0"])
+        self.assertEqual(set(roles["strikers"]), {"m1", "m2"})
+
+
 def _run_suggest_lineup(scores, fh_names=None, ceiling=None, k=0.5, never_bench=None):
     """suggest_lineup only prints -- capture stdout and pull out which
     names landed under each section header, in order."""
