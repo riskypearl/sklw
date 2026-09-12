@@ -183,12 +183,12 @@ class RoleAssignmentPriorityTests(unittest.TestCase):
         self.assertFalse(set(roles["gk"]) & set(roles["strikers"]))
 
 
-def _run_suggest_lineup(scores, fh_names=None, ceiling=None, k=0.5):
+def _run_suggest_lineup(scores, fh_names=None, ceiling=None, k=0.5, never_bench=None):
     """suggest_lineup only prints -- capture stdout and pull out which
     names landed under each section header, in order."""
     buf = io.StringIO()
     with redirect_stdout(buf):
-        sklw_lineup.suggest_lineup(scores, fh_names, ceiling, k)
+        sklw_lineup.suggest_lineup(scores, fh_names, ceiling, k, never_bench)
     sections: dict[str, list[str]] = {}
     current = None
     for line in buf.getvalue().splitlines():
@@ -289,6 +289,45 @@ class FindSolioCsvFreshnessTests(unittest.TestCase):
 
                 result = self._run_in(cwd_dir, home, mod)
                 self.assertEqual(result, Path("solio.csv"), mod.__name__)
+
+
+class NeverBenchTests(unittest.TestCase):
+    """--never-bench guarantees a manager a Squad slot even if their
+    score would otherwise land them in Bench, by swapping them with the
+    current weakest Squad member. Requested live: a captain didn't want
+    to be benched by pure EV ranking. Doesn't touch GK/Strikers."""
+
+    def setUp(self):
+        self.scores = [(f"m{i}", 100.0 - i) for i in range(16)]  # m14/m15 naturally benched
+
+    def test_protected_manager_rescued_from_bench(self):
+        sections = _run_suggest_lineup(self.scores, never_bench={"m15"})
+        self.assertIn("m15", sections["Squad"])
+        self.assertNotIn("m15", sections["Bench"])
+        self.assertEqual(len(sections["Squad"]), 11)
+        self.assertEqual(len(sections["Bench"]), 2)
+
+    def test_two_protected_managers_both_rescued(self):
+        """The bug this locks in: rescuing the 2nd protected manager must
+        not re-bench the 1st one just because it's now the weakest
+        Squad member."""
+        sections = _run_suggest_lineup(self.scores, never_bench={"m14", "m15"})
+        self.assertIn("m14", sections["Squad"])
+        self.assertIn("m15", sections["Squad"])
+        self.assertNotIn("m14", sections["Bench"])
+        self.assertNotIn("m15", sections["Bench"])
+
+    def test_unknown_name_warns_but_does_not_crash(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            sklw_lineup.suggest_lineup(self.scores, never_bench={"nonexistent"})
+        self.assertIn("WARNING", buf.getvalue())
+
+    def test_manager_already_in_squad_is_a_no_op(self):
+        sections = _run_suggest_lineup(self.scores, never_bench={"m5"})
+        self.assertIn("m5", sections["Squad"])
+        self.assertEqual(len(sections["Squad"]), 11)
+        self.assertEqual(len(sections["Bench"]), 2)
 
 
 class WildcardScoringTests(unittest.TestCase):

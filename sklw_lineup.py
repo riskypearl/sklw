@@ -1000,7 +1000,8 @@ def explain_manager(picks_data: dict, gw_used: int, players: dict[int, dict],
 
 
 def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = None,
-                    ceiling: dict[str, float] | None = None, k: float = 0.5) -> None:
+                    ceiling: dict[str, float] | None = None, k: float = 0.5,
+                    never_bench: set[str] | None = None) -> None:
     """scores: [(manager_name, projected_score), ...]. Prints a suggested
     SKLW role assignment -- top scorer to GK, next 2 to Strikers, rest
     fill the 11-a-side squad, bottom 2 benched.
@@ -1044,9 +1045,22 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
     (see above), so the highest-scoring FH manager goes there first.
     Beyond GK + both Striker slots there's no more individual-role room,
     so any further FH managers fall back into the normal pool (still
-    ceiling-weighted for the boundary, if any Striker slots remain)."""
+    ceiling-weighted for the boundary, if any Striker slots remain).
+
+    never_bench: manager names guaranteed a Squad slot even if their
+    projected score would otherwise land them in Bench -- swapped
+    with the CURRENT weakest Squad member (repeated per protected name,
+    in the order given) after the normal ranking is done. Doesn't touch
+    GK/Strikers -- only rescues someone out of Bench into Squad. If two
+    names are both protected and BOTH would otherwise be benched, both
+    get rescued (bumping the two weakest Squad members down in turn). A
+    protected name not found among the 16 scores is warned about and
+    ignored, not an error -- this is meant for a one-off human
+    preference override, not a strict guarantee that should crash a run
+    over a typo."""
     fh_names = fh_names or set()
     ceiling = ceiling or {}
+    never_bench = never_bench or set()
     ranked = sorted(scores, key=lambda x: -x[1])
     if len(ranked) < 15:
         print(f"WARNING: only {len(ranked)} managers with data (need 15) -- "
@@ -1090,6 +1104,22 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
         remaining = [ns for ns in ranked if ns[0] not in assigned]  # still plain-score ordered
         squad = remaining[0:11]
         bench = remaining[11:13]
+
+    for protected in never_bench:
+        bench_idx = next((i for i, (n, _) in enumerate(bench) if n == protected), None)
+        if bench_idx is None:
+            if protected not in {n for n, _ in squad + strikers + gk}:
+                print(f"WARNING: --never-bench name not found among this "
+                      f"week's 16 scores, ignored: {protected}")
+            continue
+        # exclude already-rescued protected names from being displaced --
+        # otherwise a second rescue can re-bench the first one if it's now
+        # the weakest Squad member.
+        candidates = [i for i, (n, _) in enumerate(squad) if n not in never_bench]
+        weakest_idx = min(candidates, key=lambda i: squad[i][1])
+        print(f"NOTE: {protected} would have been benched (protected by "
+              f"--never-bench) -- swapped into Squad for {squad[weakest_idx][0]}.")
+        bench[bench_idx], squad[weakest_idx] = squad[weakest_idx], bench[bench_idx]
 
     print("\n=== Suggested SKLW lineup ===")
     print("\nStrikers:")
@@ -1206,6 +1236,14 @@ def main():
                           "suggested lineup (GK faces both opponent "
                           "Strikers, so a big/hard-to-project FH score is "
                           "worth more there). Repeat for multiple managers.")
+    ap.add_argument("--never-bench", action="append", metavar="MANAGER_NAME",
+                     help="guarantee this club member a Squad slot even if "
+                          "their projected score would otherwise land them "
+                          "in Bench -- swapped in for the current weakest "
+                          "Squad member. A one-off human preference "
+                          "override, not an EV-maximizing suggestion -- "
+                          "doesn't touch GK/Strikers. Repeat for multiple "
+                          "managers.")
     ap.add_argument("--projections", metavar="CSV_PATH",
                      help="path to a Solio-style projections CSV "
                           "(Pos,ID,Name,BV,SV,Team,1_xMins...,1_Pts...) to "
@@ -1379,6 +1417,11 @@ def main():
     for raw in args.fh or []:
         member_name, _ = resolve_manager(raw)
         fh_names.add(member_name)
+
+    never_bench_names = set()
+    for raw in args.never_bench or []:
+        member_name, _ = resolve_manager(raw)
+        never_bench_names.add(member_name)
 
     points = ep_next_points(players)
     projections_path = Path(args.projections) if args.projections else find_solio_csv()
@@ -1673,7 +1716,7 @@ def main():
         print(f"  {name} (GW{gw_used} squad, {tag}): projected {score}{wc_tag}")
         scores.append((name, score))
 
-    suggest_lineup(scores, fh_names, ceiling, args.ceiling_weight)
+    suggest_lineup(scores, fh_names, ceiling, args.ceiling_weight, never_bench_names)
 
 
 if __name__ == "__main__":

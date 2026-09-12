@@ -361,6 +361,19 @@ the flag for multiple managers on FH the same week — the first takes
 GK, up to 2 more take the Striker slots, any beyond that stay in the
 normal pool with a note printed.
 
+`--never-bench "Manager Name"` guarantees that club member a Squad slot
+even if their projected score would otherwise land them in Bench —
+swapped in for whoever's currently the weakest Squad member. This is a
+one-off human preference override, not an EV-maximizing suggestion (a
+captain not wanting to bench themselves regardless of the numbers, say)
+— it doesn't touch GK/Strikers, only rescues someone out of Bench.
+Repeat for multiple managers; if both current Bench slots are
+protected, both get rescued (the second rescue is guaranteed not to
+re-bench the first, even if the first-rescued manager is now the
+weakest Squad member). A name that doesn't match any of the 16 scores
+just prints a warning and is otherwise ignored, rather than erroring
+the whole run over a typo.
+
 Every run also prints a banner up front with the club name ("Algorithm
 and Blues" — edit `CLUB_NAME` at the top of the script if this changes)
 and the full roster of member names → FPL manager IDs, so it's always
