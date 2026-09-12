@@ -651,19 +651,36 @@ def resolve_manager(name: str) -> tuple[str, int]:
 
 def resolve_players(bootstrap: dict, fragments: str) -> list[int]:
     """Resolve a comma-separated list of name fragments to element IDs.
-    Each fragment must match exactly one player -- ambiguous or missing
-    matches abort with the candidate list so the user can be more specific,
-    rather than silently guessing which player was meant."""
-    ids = []
+    Matching folds accents/special characters on BOTH sides (a plain
+    ASCII 'Joao Pedro' or 'Hornicek' fragment matches a stored 'João
+    Pedro'/'Hornícek' just fine -- no need to type or copy-paste special
+    characters, which is unreliable in a Windows terminal) -- same
+    accent-folding as load_solio_projections' name matching, via _fold().
+
+    Every fragment is checked before anything fails: ambiguous or
+    missing matches are ALL collected and printed together in one pass,
+    rather than aborting at the first bad one and making the user fix
+    problems one at a time across repeated re-runs."""
+    problems: list[str] = []
+    ids: list[int] = []
     for frag in [f.strip() for f in fragments.split(",") if f.strip()]:
+        folded = _fold(frag)
         matches = [p for p in bootstrap["elements"]
-                   if frag.lower() in f"{p['first_name']} {p['second_name']}".lower()]
+                   if folded in _fold(f"{p['first_name']} {p['second_name']}")]
         if len(matches) != 1:
-            print(f"ERROR: '{frag}' matched {len(matches)} players, need exactly 1:")
+            lines = [f"'{frag}' matched {len(matches)} players, need exactly 1:"]
             for p in matches[:10]:
-                print(f"  {p['id']:>6}  {p['first_name']} {p['second_name']}")
-            sys.exit(1)
-        ids.append(matches[0]["id"])
+                lines.append(f"    {p['id']:>6}  {p['first_name']} {p['second_name']}")
+            problems.append("\n".join(lines))
+        else:
+            ids.append(matches[0]["id"])
+
+    if problems:
+        print(f"ERROR: {len(problems)} name(s) out of {len(fragments.split(','))} "
+              f"didn't resolve cleanly:\n")
+        for i, p in enumerate(problems, 1):
+            print(f"  {i}. {p}")
+        sys.exit(1)
     return ids
 
 
