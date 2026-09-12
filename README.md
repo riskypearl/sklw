@@ -591,6 +591,19 @@ whatever's left unpinned still gets ranked as normal to fill the
 remaining slots. A name pinned to more than one role is resolved by
 priority GK > Strikers > Bench rather than erroring.
 
+If you don't pass `--them-gk-id`/`--them-strikers-ids`/`--us-gk-id`/
+`--us-strikers-ids` on the command line, the tool interactively prompts
+for each one instead (skippable by just pressing Enter) — remembering
+the exact flag names and retyping the whole command isn't something
+most captains will bother with mid-week just to pin a scouted GK.
+Doesn't apply to `--them-bench-ids`/`--us-bench-ids` (Bench doesn't
+affect scoring, so there's nothing worth prompting for). Pass
+`--no-prompt` to skip all of this for a non-interactive/scripted run —
+unpinned managers just get the normal assumed-optimal assignment, same
+as always. Also automatically skipped if stdin isn't a real interactive
+terminal (e.g. output piped to a file), so it never hangs waiting for
+input that isn't coming.
+
 **How accurate is it?** Run `python calibrate_matchup.py` to check —
 it builds synthetic matchups from real historical FPL data (two seasons:
 one purely to train the score-variance model, a DIFFERENT one to check

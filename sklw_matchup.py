@@ -571,6 +571,22 @@ def resolve_role_ids(spec: str | None, roster: dict[str, int], label: str) -> se
     return names
 
 
+def prompt_for_role_ids(current: str | None, prompt_text: str, no_prompt: bool) -> str | None:
+    """Falls back to an interactive input() for a GK/Strikers ID flag
+    that wasn't given on the command line -- --them-gk-id/--them-
+    strikers-ids/--us-gk-id/--us-strikers-ids are useful the moment
+    you've actually scouted a real declared lineup, but remembering the
+    exact flag name and re-typing the whole command each time is
+    friction most captains won't bother with mid-week. Skipped
+    entirely (returns `current` unchanged) if a value was already given
+    via the flag, --no-prompt is set, or stdin isn't interactive (a
+    redirected/scripted run shouldn't hang waiting for input)."""
+    if current or no_prompt or not sys.stdin.isatty():
+        return current
+    answer = input(prompt_text).strip()
+    return answer or None
+
+
 def build_club_scores(roster: dict[str, int], players: dict[int, dict], points: dict[int, float],
                        last_finished_gw: int, next_gw: int, overrides: dict[str, dict],
                        live_stats: dict[int, dict], team_status: dict[int, str]
@@ -972,6 +988,12 @@ def main():
                      help="same as --them-strikers-ids, for our own club")
     ap.add_argument("--us-bench-ids", metavar="ID,ID",
                      help="same as --them-bench-ids, for our own club")
+    ap.add_argument("--no-prompt", action="store_true",
+                     help="skip the interactive GK/Strikers ID prompts "
+                          "below (e.g. for a non-interactive/scripted "
+                          "run) -- unpinned managers just get the "
+                          "assumed-optimal projection-based assignment "
+                          "as normal.")
     ap.add_argument("--projections", metavar="CSV_PATH",
                      help="Solio-style projections CSV (see sklw_lineup.py). "
                           "Defaults to auto-detecting solio.csv / Downloads, "
@@ -1095,6 +1117,21 @@ def main():
     if len(us_club) < 15 or len(them_club) < 15:
         print("ERROR: too few managers fetched on one side to form a valid lineup (need 15)")
         sys.exit(1)
+
+    if not args.no_prompt and sys.stdin.isatty():
+        print("\nIf you know either club's REAL declared GK/Strikers for this "
+              "matchup (scouted from their lineup), enter the FPL manager "
+              "ID(s) below to pin them -- otherwise just press Enter to skip "
+              "and let the tool assume an optimal assignment. "
+              "(--no-prompt skips all of this.)")
+    args.them_gk_id = prompt_for_role_ids(
+        args.them_gk_id, "Opponent's real GK manager ID (Enter to skip): ", args.no_prompt)
+    args.them_strikers_ids = prompt_for_role_ids(
+        args.them_strikers_ids, "Opponent's real Strikers manager IDs, comma-separated (Enter to skip): ", args.no_prompt)
+    args.us_gk_id = prompt_for_role_ids(
+        args.us_gk_id, "Our real GK manager ID (Enter to skip): ", args.no_prompt)
+    args.us_strikers_ids = prompt_for_role_ids(
+        args.us_strikers_ids, "Our real Strikers manager IDs, comma-separated (Enter to skip): ", args.no_prompt)
 
     us_forced_gk = next(iter(resolve_role_ids(args.us_gk_id, us_roster, "us-gk-id")), None)
     them_forced_gk = next(iter(resolve_role_ids(args.them_gk_id, them_roster, "them-gk-id")), None)

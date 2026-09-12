@@ -294,6 +294,41 @@ class FindSolioCsvFreshnessTests(unittest.TestCase):
                 self.assertEqual(result, Path("solio.csv"), mod.__name__)
 
 
+class PromptForRoleIdsTests(unittest.TestCase):
+    """sklw_matchup.py's interactive fallback for --them-gk-id/--them-
+    strikers-ids/--us-gk-id/--us-strikers-ids -- skippable with Enter,
+    never hangs on a non-interactive stdin, and never overrides a value
+    already given on the command line."""
+
+    def test_existing_value_bypasses_prompt_entirely(self):
+        with mock.patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            result = sklw_matchup.prompt_for_role_ids("123", "prompt: ", no_prompt=False)
+        self.assertEqual(result, "123")
+
+    def test_no_prompt_flag_skips(self):
+        with mock.patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            result = sklw_matchup.prompt_for_role_ids(None, "prompt: ", no_prompt=True)
+        self.assertIsNone(result)
+
+    def test_non_interactive_stdin_skips_without_hanging(self):
+        with mock.patch("sys.stdin.isatty", return_value=False), \
+             mock.patch("builtins.input", side_effect=AssertionError("should not prompt")):
+            result = sklw_matchup.prompt_for_role_ids(None, "prompt: ", no_prompt=False)
+        self.assertIsNone(result)
+
+    def test_typed_answer_is_returned(self):
+        with mock.patch("sys.stdin.isatty", return_value=True), \
+             mock.patch("builtins.input", return_value="456"):
+            result = sklw_matchup.prompt_for_role_ids(None, "prompt: ", no_prompt=False)
+        self.assertEqual(result, "456")
+
+    def test_empty_answer_means_skip(self):
+        with mock.patch("sys.stdin.isatty", return_value=True), \
+             mock.patch("builtins.input", return_value=""):
+            result = sklw_matchup.prompt_for_role_ids(None, "prompt: ", no_prompt=False)
+        self.assertIsNone(result)
+
+
 class FetchMasterListTests(unittest.TestCase):
     """fetch_master_list.py pulls a Google Sheet tab via its public CSV
     export URL. If the sheet isn't actually shared publicly, Google
