@@ -560,7 +560,7 @@ advance either.
 Two standalone scripts handle this:
 ```
 python fetch_sheet_workbook.py --login
-python fetch_sheet_workbook.py --sheet-id <SHEET_ID>
+python fetch_sheet_workbook.py
 python resolve_matchup_roles.py --our-club "Algorithm"
 ```
 `fetch_sheet_workbook.py` is network-only, same login pattern as
@@ -568,16 +568,20 @@ python resolve_matchup_roles.py --our-club "Algorithm"
 browser window, using a persistent Chrome profile reused afterwards —
 no credentials ever touch disk). Since colors matter here, it downloads
 the ENTIRE workbook as `.xlsx` (`pip install openpyxl` first) — xlsx
-keeps cell fill colors, CSV doesn't. Confirmed live: an automated jump
-straight to the document (even just its normal edit URL, not just the
-export link) gets a real "You need access" refusal, for an account that
-DOES have access and can open the exact same document with a genuine
-click — Google's suspicion here keys off how the navigation happened,
-not just the account. So the browser opens on the Sheets home page and
+keeps cell fill colors, CSV doesn't. Confirmed live, twice: an automated
+`page.goto()` gets a real "You need access" refusal both for the
+document's own URL AND for the export link directly, even right after a
+genuine click into that same document in that same session — Google's
+suspicion here keys off how a navigation happened (a real click vs. a
+scripted goto), not the account or prior history. So neither sensitive
+step is a plain URL jump: the Sheets home page opens automatically and
 waits for you to click into the SKLW sheet yourself (press Enter once
-it's open) — same "make the sensitive step manual" fix `fetch_solio.py`
-already needed for its own login. Only the export request afterwards is
-automated.
+it's open), then the download is driven by actually clicking through
+File > Download > Microsoft Excel (.xlsx) — attempted automatically,
+falling back to "finish that click yourself" (still captures the
+resulting download) if Google's exact menu ever changes. Same fix
+category as `fetch_solio.py`'s manual login/download-button steps
+throughout.
 
 `resolve_matchup_roles.py` is pure logic, no network, fully unit-tested
 against a synthetic workbook (see `test_scoring.py`): it opens "Live

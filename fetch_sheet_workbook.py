@@ -24,16 +24,20 @@ manages its own copy of the profile so it works standalone either way.
 Hitting the export URL cold got a real "You need access" refusal, even
 for an account that DOES have access -- confirmed live. Tried fixing it
 by having the script itself navigate home page -> document -> export
-first (same path a human takes); that still got refused at the document
-step itself. Confirmed the actual distinction live: a genuine CLICK into
-the document gets through, but an automated page.goto() straight to its
-edit URL does not, even in the exact same logged-in session -- Google's
-suspicion here keys off how the navigation happened, not just prior
-history. So, same fix category as fetch_solio.py's manual login/click
-steps: the home page is opened automatically, but clicking into the
-actual document is a manual one-time action per run (the browser stays
-open and waits for you), and only the export request afterwards is
-automated.
+first (same path a human takes); that still got refused, at BOTH the
+document step and (separately, tried again after a genuine click into
+the document) the export step itself. Confirmed the actual distinction
+live: a genuine CLICK gets through, an automated page.goto() to the same
+URL in the same logged-in session does not -- Google's suspicion here
+keys off how the navigation happened, not just the account or prior
+history. So neither sensitive step can be a plain goto(): the home page
+opens automatically, but clicking into the actual document is manual
+(the browser waits for you), and the download is driven by actually
+clicking through File > Download > Microsoft Excel (.xlsx) -- attempted
+automatically, falling back to "finish this click yourself" (still
+captures the resulting download either way) if Google's exact menu
+wording/structure ever changes. Same fix category as fetch_solio.py's
+manual login/download-button steps throughout.
 
 Setup (one-time):
     pip install playwright openpyxl
@@ -44,14 +48,12 @@ Setup (one-time):
         sign-in prompt), then press Enter in the terminal)
 
 Normal use:
-    python fetch_sheet_workbook.py --sheet-id <SHEET_ID>
+    python fetch_sheet_workbook.py
         (opens the Sheets home page -- click into the SKLW sheet
-        yourself, press Enter once you can see it open, and the rest
-        downloads automatically as sheet_workbook.xlsx)
-
-<SHEET_ID> is the long ID in the sheet's URL
-(.../spreadsheets/d/<SHEET_ID>/...) -- same sheet fetch_master_list.py
-already points at.
+        yourself, press Enter once you can see it open, then it clicks
+        File > Download > Microsoft Excel automatically, or asks you to
+        finish that click yourself if the menu didn't match -- saves as
+        sheet_workbook.xlsx either way)
 
 Feed the resulting sheet_workbook.xlsx into resolve_matchup_roles.py.
 """
@@ -96,28 +98,29 @@ def do_login():
           f"Future runs (without --login) will reuse it automatically.")
 
 
-def do_fetch(sheet_id: str, out_path: Path):
+def do_fetch(out_path: Path):
     from playwright.sync_api import sync_playwright
 
     if not PROFILE_DIR.exists():
         print(f"No saved session at {PROFILE_DIR} -- run with --login first.")
         return
 
-    export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
     with sync_playwright() as p:
         context = _launch_context(p, headless=False)
         page = context.new_page()
         try:
-            # Confirmed live: even an automated page.goto() straight to
-            # the document's own edit URL (not just the export URL) gets
-            # a real "You need access" refusal, for an account that DOES
-            # have access and can open the exact same document with a
-            # real click. Google's suspicion here seems to key off HOW
-            # the navigation happened (a genuine click vs. a scripted
-            # goto), not just the account or prior page history -- so
-            # unlike the export step, this one can't be automated away.
-            # Same fix category as fetch_solio.py's manual login/click
-            # steps: make the sensitive step manual, automate the rest.
+            # Confirmed live, twice: an automated page.goto() gets a real
+            # "You need access" refusal both for the document's own edit
+            # URL AND for the export URL directly -- even right after a
+            # genuine click into the same document in the same session.
+            # Google's suspicion here keys off HOW a navigation happened
+            # (a real click event vs. a scripted goto), not the account
+            # or prior page history. So both sensitive steps are driven
+            # by actual UI clicks, same fix category as fetch_solio.py's
+            # manual login/download-button steps: File > Download >
+            # Microsoft Excel (.xlsx), attempted automatically, with a
+            # manual fallback (finish the click yourself, still captured)
+            # if the exact menu wording/structure has changed.
             page.goto("https://docs.google.com/spreadsheets/", wait_until="load")
             print("A browser window has opened on the Google Sheets home "
                   "page. Click into the SKLW sheet yourself here (search "
@@ -126,17 +129,28 @@ def do_fetch(sheet_id: str, out_path: Path):
                   "that has access, only a real click gets through.")
             input("Once you can actually see the document open (tabs, cells "
                   "visible), press Enter here...")
-            print("Fetching the whole workbook (every tab, colors intact) as xlsx...")
-            with page.expect_download(timeout=60_000) as download_info:
-                page.goto(export_url)
-            download = download_info.value
+            print("Downloading via File > Download > Microsoft Excel (.xlsx) "
+                  "-- even the export LINK gets refused when requested by a "
+                  "script, so this clicks through the real menu instead.")
+            try:
+                with page.expect_download(timeout=90_000) as download_info:
+                    page.get_by_text("File", exact=True).first.click(timeout=10_000)
+                    page.wait_for_timeout(500)
+                    page.get_by_text("Download", exact=True).first.click(timeout=10_000)
+                    page.wait_for_timeout(500)
+                    page.get_by_text("Microsoft Excel (.xlsx)", exact=True).first.click(timeout=10_000)
+                download = download_info.value
+            except Exception:
+                print("Couldn't find/click through that menu automatically "
+                      "(Google's exact wording/structure may differ from "
+                      "what this script expects) -- click File > Download > "
+                      "Microsoft Excel (.xlsx) yourself now in that browser "
+                      "window. Still watching for the resulting download...")
+                download = page.wait_for_event("download", timeout=120_000)
             download.save_as(str(out_path))
             print(f"Saved to {out_path}")
         except Exception as e:
-            print(f"Could not download the workbook ({e}). If a Google "
-                  f"sign-in or access-denied page appeared instead of a "
-                  f"direct download, the saved session may have expired "
-                  f"-- run --login again. Nothing saved.")
+            print(f"Could not download the workbook ({e}). Nothing saved.")
         context.close()
 
 
@@ -144,9 +158,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--login", action="store_true",
                      help="one-time (or session-expired) manual login, saves the session")
-    ap.add_argument("--sheet-id", help="the sheet's ID from its URL "
-                                        "(.../spreadsheets/d/<SHEET_ID>/...) -- required "
-                                        "for a normal fetch, not for --login")
     ap.add_argument("--out", default=str(OUT_PATH),
                      help=f"output path (default: {OUT_PATH})")
     args = ap.parse_args()
@@ -155,10 +166,7 @@ def main():
         do_login()
         return
 
-    if not args.sheet_id:
-        print("ERROR: --sheet-id is required (unless using --login)")
-        return
-    do_fetch(args.sheet_id, Path(args.out))
+    do_fetch(Path(args.out))
 
 
 if __name__ == "__main__":
