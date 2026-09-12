@@ -21,11 +21,15 @@ Since this is the same Google account, running fetch_solio.py --login
 first may already leave you logged in here too -- but this script
 manages its own copy of the profile so it works standalone either way.
 
-Because this hits the authenticated export URL directly (no UI
-clicking needed, unlike Solio's page which required finding a specific
-download button), the normal fetch here is much simpler than
-fetch_solio.py's -- just navigate to the export URL as a logged-in user
-and capture the resulting download.
+Hitting the export URL cold (no prior normal navigation in the browser
+session) got a real "You need access" refusal even for an account that
+DOES have access -- confirmed live. Google's Sheets access checks seem
+to want to see the document opened normally first, not jumped straight
+to via its export endpoint. So the normal fetch opens Google Sheets'
+home page, then the actual document, and only requests the export
+afterwards, in that same session -- the same path a human takes,
+automated. No UI button-clicking needed beyond that (unlike Solio's
+page, which required finding a specific download button).
 
 Setup (one-time):
     pip install playwright openpyxl
@@ -93,12 +97,32 @@ def do_fetch(sheet_id: str, out_path: Path):
         print(f"No saved session at {PROFILE_DIR} -- run with --login first.")
         return
 
+    edit_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
     export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
     with sync_playwright() as p:
         context = _launch_context(p, headless=False)
         page = context.new_page()
-        print(f"Fetching the whole workbook (every tab, colors intact) as xlsx...")
         try:
+            # Hitting the export URL cold (no prior normal navigation in
+            # this session) got flagged and refused with a real "You
+            # need access" page even for an account that DOES have
+            # access -- confirmed live. Google's Sheets access checks
+            # seem to want to see the doc opened normally first. So:
+            # home page -> the actual doc, same path a human takes,
+            # THEN request the export from within that same session.
+            print("Opening Google Sheets, then the document, before requesting the export...")
+            page.goto("https://docs.google.com/spreadsheets/")
+            page.wait_for_load_state("networkidle")
+            page.goto(edit_url)
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(3_000)  # let the doc actually finish rendering
+            if "You need access" in page.content() or "you need access" in page.title().lower():
+                print("Opening the document itself already shows an access-denied "
+                      "page -- this account genuinely isn't shared on it yet. "
+                      "Nothing to do here until access is granted.")
+                context.close()
+                return
+            print("Fetching the whole workbook (every tab, colors intact) as xlsx...")
             with page.expect_download(timeout=60_000) as download_info:
                 page.goto(export_url)
             download = download_info.value
@@ -106,9 +130,9 @@ def do_fetch(sheet_id: str, out_path: Path):
             print(f"Saved to {out_path}")
         except Exception as e:
             print(f"Could not download the workbook ({e}). If a Google "
-                  f"sign-in page appeared instead of a direct download, "
-                  f"the saved session has expired -- run --login again. "
-                  f"Nothing saved.")
+                  f"sign-in or access-denied page appeared instead of a "
+                  f"direct download, the saved session may have expired "
+                  f"-- run --login again. Nothing saved.")
         context.close()
 
 
