@@ -972,6 +972,28 @@ def current_known_scores(club: dict[str, dict],
     return known, pending
 
 
+def pending_starter_names(club: dict[str, dict], players: dict[int, dict],
+                           live_locked: dict[int, float]) -> dict[str, list[str]]:
+    """Per-manager list of starter NAMES whose match hasn't started yet
+    (not in live_locked) -- the actual players behind
+    current_known_scores' pending COUNT. Requested live: seeing "104 of
+    our starters, 104 of theirs" pending doesn't say WHO -- e.g. a club
+    leading on already-known results because more of its players
+    happen to have early kickoffs isn't visible from a bare count."""
+    out: dict[str, list[str]] = {}
+    for name, info in club.items():
+        if "manual_score" in info:
+            out[name] = []
+            continue
+        names = []
+        for pid in info["starters"]:
+            if pid not in live_locked:
+                el = players.get(pid)
+                names.append(f"{el['first_name']} {el['second_name']}" if el else f"element #{pid}")
+        out[name] = names
+    return out
+
+
 def print_roles(label: str, club: dict[str, dict], roles: dict[str, list[str]]) -> None:
     print(f"\n{label} suggested roles (by projection):")
     print(f"  GK:       {roles['gk'][0]} ({club[roles['gk'][0]]['projected']:.1f})")
@@ -1217,6 +1239,18 @@ def main():
         print(f"Still to play: {us_left} of our starters, {them_left} of theirs "
               f"({'; '.join(f'{n}: {p} pending' for n, p in us_pending.items() if p) or 'none'} "
               f"| {'; '.join(f'{n}: {p} pending' for n, p in them_pending.items() if p) or 'none'})")
+
+        us_pending_names = pending_starter_names(us_club, players, live_locked)
+        them_pending_names = pending_starter_names(them_club, players, live_locked)
+        print("\nWho's still to play (per manager):")
+        print("  Us:")
+        for n, names in us_pending_names.items():
+            if names:
+                print(f"    {n}: {', '.join(names)}")
+        print("  Them:")
+        for n, names in them_pending_names.items():
+            if names:
+                print(f"    {n}: {', '.join(names)}")
 
     rng = random.Random(args.seed)
     print(f"\nRunning {args.sims} simulated matchweeks...")

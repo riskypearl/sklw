@@ -576,6 +576,12 @@ already been played (e.g. only one late kickoff left), the simulated
 win probability CAN legitimately collapse toward 100%/0% — check this
 section to see the real numbers behind that and how many players are
 actually still undecided, rather than trusting the percentage blind.
+Right below the pending-count line, a "Who's still to play (per
+manager)" section lists the actual player NAMES behind each manager's
+pending count — a bare "104 of our starters, 104 of theirs" doesn't say
+WHO, e.g. a club currently leading on already-known results just
+because more of its players happened to have early kickoffs isn't
+visible from a count alone.
 
 By default both sides' GK/Strikers/Squad/Bench are assigned by assumed-
 optimal projection ranking (same rule as `sklw_lineup.py`). If you

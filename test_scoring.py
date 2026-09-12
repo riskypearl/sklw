@@ -186,6 +186,36 @@ class RoleAssignmentPriorityTests(unittest.TestCase):
         self.assertFalse(set(roles["gk"]) & set(roles["strikers"]))
 
 
+class PendingStarterNamesTests(unittest.TestCase):
+    """Requested live: 'Still to play: 104 of our starters, 104 of
+    theirs' as a bare count didn't say WHO -- pending_starter_names()
+    returns the actual player names behind that count."""
+
+    def setUp(self):
+        self.players = {
+            1: {"first_name": "A", "second_name": "Player1"},
+            2: {"first_name": "B", "second_name": "Player2"},
+            3: {"first_name": "C", "second_name": "Player3"},
+        }
+
+    def test_returns_names_of_not_yet_started_starters_only(self):
+        club = {"Alice": {"starters": [1, 2, 3], "captain": 1}}
+        live_locked = {1: 5.0}  # only player 1 has started
+        result = sklw_matchup.pending_starter_names(club, self.players, live_locked)
+        self.assertEqual(result["Alice"], ["B Player2", "C Player3"])
+
+    def test_manual_score_manager_has_no_pending(self):
+        club = {"Bob": {"manual_score": 50.0}}
+        result = sklw_matchup.pending_starter_names(club, self.players, {})
+        self.assertEqual(result["Bob"], [])
+
+    def test_all_started_means_empty_list(self):
+        club = {"Alice": {"starters": [1, 2], "captain": 1}}
+        live_locked = {1: 5.0, 2: 3.0}
+        result = sklw_matchup.pending_starter_names(club, self.players, live_locked)
+        self.assertEqual(result["Alice"], [])
+
+
 class SklwMatchupFreeHitTests(unittest.TestCase):
     """sklw_matchup.py's assign_roles had NO Free Hit handling at all --
     an FH manager's often-unrepresentative projection could silently
