@@ -700,6 +700,55 @@ three bugs — the calibration *methodology* was always independent of
 them; only the exact number moves a little each time a rules bug gets
 fixed.
 
+**Does it get the exact scoreline right, not just win/loss?** Asked
+whether the win-probability model should use a **Dixon-Coles**
+correction for this. Looked into it and it doesn't actually apply here:
+Dixon-Coles fixes a specific problem in *parametric* models — assume
+each side's goals are independent Poisson processes with fixed
+attack/defense rates, discover real low scores (0-0, 1-0, 0-1, 1-1)
+don't follow that independence assumption, add a correction term for
+exactly those four cells. `sklw_matchup.py` doesn't fit that shape at
+all — it runs full Monte Carlo simulation (thousands of trials of both
+clubs' actual player-level FPL scores, correlated via the team-scoped
+block bootstrap above), then applies SKLW's exact goal rules to each
+trial. Whatever joint correlation exists between the two sides'
+scorelines is already whatever the simulation produces; there's no
+independence assumption being smuggled in for Dixon-Coles to correct.
+Bolting one on anyway would double-correct for something already
+handled structurally.
+
+The actually-relevant question — is the simulated distribution of
+*exact scorelines* (not just who wins) calibrated — is real and now
+checked directly, extending `calibrate_matchup.py` with the full
+simulated (g1, g2) distribution per trial instead of just a win
+probability:
+- **Multiclass Brier score** (0 = perfect; naturally higher than the
+  binary win/loss Brier above, since there are many more exact outcomes
+  to get right, not just 2) — a single summary number for the whole
+  scoreline distribution's accuracy.
+- **Pooled probability-bucket calibration**: every (trial,
+  predicted-scoreline) pair the model assigned a nonzero probability to
+  is one data point — generalizes the win-probability bucket check
+  above to every possible outcome instead of just win/loss.
+- **Common-scoreline check** — the specific thing Dixon-Coles corrects
+  for in a parametric model (0-0/1-0/0-1/1-1 systematically mismatched
+  under an independence assumption) — checked directly against real
+  historical outcomes instead of assumed: average predicted probability
+  vs. realized frequency for each of the 9 lowest scorelines plus
+  "other".
+
+Sample run (`--trials 300 --inner-sims 150`, smaller than the 1200/300
+default for a quick check): multiclass Brier 0.96, with the pooled
+bucket check showing real overconfidence in the 10-30% predicted range
+(23.2% predicted vs. 9.6% realized in the 20-30% bucket) — a genuine,
+previously invisible miscalibration the win/loss-only check couldn't
+have caught, since a scoreline can be wrong in a way that doesn't flip
+who wins. The common-scoreline table also showed 1-0/0-1 (thin
+one-goal-margin Strikers wins) predicted somewhat more often than they
+actually occurred. Worth a full-size run (`--trials 1200 --inner-sims
+300`, the default) before treating these numbers as settled — this was
+a reduced-size smoke test to confirm the mechanism works end-to-end.
+
 ## Known gaps / next steps
 
 - No `docs/rules.md` yet — this README doubles as the rules reference for

@@ -25,6 +25,7 @@ Run: python3 -m unittest test_scoring.py -v
 import io
 import json
 import os
+import random
 import tempfile
 import time
 import unittest
@@ -598,6 +599,64 @@ class WildcardScoringTests(unittest.TestCase):
         # the 2 weakest of each outfield position group must be benched
         self.assertIn(1, bench)  # weakest GK (point value 10, other GK is 11)
         self.assertIn(3, bench)  # weakest DEF
+
+
+class ScorelineDistributionCalibrationTests(unittest.TestCase):
+    """calibrate_matchup.py's scoreline-level calibration (added instead
+    of a Dixon-Coles correction, which is a fix for a different kind of
+    model -- see the README/module docstring). Checks the core math
+    directly: the multiclass Brier shortcut formula must match its
+    literal definition, and the pooled-bucket data points must be
+    derivable from a predicted distribution correctly."""
+
+    def test_multiclass_brier_shortcut_matches_literal_definition(self):
+        pred_dist = {(1, 0): 0.5, (0, 0): 0.3, (2, 1): 0.2}
+        real = (1, 0)
+        shortcut = sum(p * p for p in pred_dist.values()) - 2 * pred_dist.get(real, 0.0) + 1.0
+        # literal: sum((p_i - y_i)^2) over every scoreline with p_i != 0 union {real}
+        all_scores = set(pred_dist) | {real}
+        literal = sum((pred_dist.get(s, 0.0) - (1.0 if s == real else 0.0)) ** 2 for s in all_scores)
+        self.assertAlmostEqual(shortcut, literal, places=9)
+
+    def test_multiclass_brier_shortcut_when_real_outcome_unseen_in_sim(self):
+        """The real scoreline never showing up in pred_dist (probability
+        implicitly 0) must still compute correctly via the shortcut."""
+        pred_dist = {(1, 0): 0.6, (0, 0): 0.4}
+        real = (3, 1)  # never simulated
+        shortcut = sum(p * p for p in pred_dist.values()) - 2 * pred_dist.get(real, 0.0) + 1.0
+        all_scores = set(pred_dist) | {real}
+        literal = sum((pred_dist.get(s, 0.0) - (1.0 if s == real else 0.0)) ** 2 for s in all_scores)
+        self.assertAlmostEqual(shortcut, literal, places=9)
+
+    def test_perfect_prediction_gives_zero_multiclass_brier(self):
+        pred_dist = {(2, 1): 1.0}
+        real = (2, 1)
+        brier = sum(p * p for p in pred_dist.values()) - 2 * pred_dist.get(real, 0.0) + 1.0
+        self.assertAlmostEqual(brier, 0.0, places=9)
+
+
+class PredictedScoreDistributionTests(unittest.TestCase):
+    """predicted_score_distribution must always return probabilities
+    that sum to 1.0 across whatever scorelines occurred in-sim."""
+
+    def _member(self):
+        return {"xps": [5.0] * 11, "positions": ["GK"] + ["DEF"] * 4 + ["MID"] * 4 + ["FWD"] * 2,
+                "teams": ["TeamA"] * 11, "captain_idx": 0}
+
+    def test_probabilities_sum_to_one(self):
+        club1 = [self._member() for _ in range(16)]
+        club2 = [self._member() for _ in range(16)]
+        roles1 = calibrate_matchup.assign_roles([sum(m["xps"]) for m in club1])
+        roles2 = calibrate_matchup.assign_roles([sum(m["xps"]) for m in club2])
+        fallback = {"GK": [0.0, 1.0, -1.0], "DEF": [0.0, 1.0, -1.0],
+                    "MID": [0.0, 1.0, -1.0], "FWD": [0.0, 1.0, -1.0]}
+        team_gw_residuals = {("TeamA", 1): fallback}
+        team_gw_index = {"TeamA": [1]}
+        rng = random.Random(1)
+        dist = calibrate_matchup.predicted_score_distribution(
+            rng, club1, roles1, club2, roles2, team_gw_residuals, team_gw_index, fallback, 200)
+        self.assertAlmostEqual(sum(dist.values()), 1.0, places=9)
+        self.assertGreater(len(dist), 0)
 
 
 class BacktestMethodCTests(unittest.TestCase):

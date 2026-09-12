@@ -49,6 +49,7 @@ import csv
 import io
 import random
 import statistics
+from collections import Counter
 
 import requests
 
@@ -260,13 +261,24 @@ def simulate_member_score(rng: random.Random, member: dict, team_shocks: dict[st
     return total
 
 
-def predicted_win_probability(rng: random.Random, club1: list[dict], roles1: dict,
-                               club2: list[dict], roles2: dict,
-                               team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
-                               team_gw_index: dict[str, list[int]],
-                               fallback_residuals: dict[str, list[float]], inner_sims: int) -> float:
+def predicted_score_distribution(rng: random.Random, club1: list[dict], roles1: dict,
+                                  club2: list[dict], roles2: dict,
+                                  team_gw_residuals: dict[tuple[str, int], dict[str, list[float]]],
+                                  team_gw_index: dict[str, list[int]],
+                                  fallback_residuals: dict[str, list[float]],
+                                  inner_sims: int) -> dict[tuple[int, int], float]:
+    """The full simulated joint distribution over exact (g1, g2)
+    scorelines for one matchup -- win probability is just this summed
+    over the g1 > g2 cells, but the full distribution is what actually
+    needs checking for scoreline-level calibration (see module
+    docstring's Dixon-Coles discussion in the README): does sklw_matchup.py
+    only get the WIN/LOSS call right, or the exact scoreline
+    probabilities too? Returns {(g1, g2): probability, ...} over
+    whichever scorelines actually occurred across inner_sims trials
+    (probabilities sum to 1.0; an untouched scoreline is implicitly 0,
+    not listed)."""
     teams_needed = {t for m in club1 + club2 for t in m["teams"]}
-    wins = 0
+    counts: Counter[tuple[int, int]] = Counter()
     for _ in range(inner_sims):
         team_shocks = pick_team_shocks(rng, teams_needed, team_gw_index)
         scores1 = [simulate_member_score(rng, m, team_shocks, team_gw_residuals, fallback_residuals)
@@ -275,9 +287,8 @@ def predicted_win_probability(rng: random.Random, club1: list[dict], roles1: dic
                    for m in club2]
         g1 = match_goals(scores1, roles1, scores2, roles2)
         g2 = match_goals(scores2, roles2, scores1, roles1)
-        if g1 > g2:
-            wins += 1
-    return wins / inner_sims
+        counts[(g1, g2)] += 1
+    return {score: n / inner_sims for score, n in counts.items()}
 
 
 def real_outcome(club1: list[dict], roles1: dict, club2: list[dict], roles2: dict) -> tuple[int, int]:
@@ -328,6 +339,7 @@ def main():
     target_gws = list(range(1, 39))
 
     records: list[tuple[float, bool, bool]] = []  # (predicted_win_prob, real_win, real_draw)
+    score_records: list[tuple[dict[tuple[int, int], float], tuple[int, int]]] = []  # (pred_dist, real_scoreline)
     for _ in range(args.trials):
         target_gw = rng.choice(target_gws)
         eligible = {eid: e for eid, e in history.items() if target_gw in e["by_gw"]}
@@ -345,11 +357,13 @@ def main():
         roles1 = assign_roles([m["projected"] for m in club1])
         roles2 = assign_roles([m["projected"] for m in club2])
 
-        pred = predicted_win_probability(rng, club1, roles1, club2, roles2,
-                                          team_gw_residuals, team_gw_index,
-                                          fallback_residuals, args.inner_sims)
+        pred_dist = predicted_score_distribution(rng, club1, roles1, club2, roles2,
+                                                  team_gw_residuals, team_gw_index,
+                                                  fallback_residuals, args.inner_sims)
+        pred = sum(p for (g1, g2), p in pred_dist.items() if g1 > g2)
         g1, g2 = real_outcome(club1, roles1, club2, roles2)
         records.append((pred, g1 > g2, g1 == g2))
+        score_records.append((pred_dist, (g1, g2)))
 
     n = len(records)
     print(f"\n{n} valid trials.\n")
@@ -371,6 +385,79 @@ def main():
     print(f"Real draw rate in these trials: {draw_rate:.1f}% "
           f"(draws are excluded from the win-rate calibration buckets above, "
           f"included as a 'not a win' in the Brier score)")
+
+    print_scoreline_calibration(score_records)
+
+
+def print_scoreline_calibration(score_records: list[tuple[dict[tuple[int, int], float], tuple[int, int]]]) -> None:
+    """Checks whether the full simulated (g1, g2) scoreline distribution
+    is calibrated, not just the win/loss call the section above checks.
+    Considered and rejected a Dixon-Coles-style parametric correction
+    for this (see the README) -- that's a fix for independent-Poisson
+    models fit to marginal scoring rates, not for a Monte Carlo
+    simulation that already produces whatever joint scoreline
+    correlation the underlying player-score simulation has. What's
+    actually worth checking is whether that simulated distribution
+    matches reality, which is what this does directly against the same
+    real historical outcomes used above -- no parametric model or
+    correction layered on top."""
+    n = len(score_records)
+
+    # Multiclass Brier (quadratic score): for a predicted distribution p
+    # over scorelines and a one-hot real outcome, sum((p_i - y_i)^2) over
+    # every scoreline simplifies to sum(p_i^2) - 2*p_real + 1, since y is
+    # one-hot (sum(y_i^2) = 1, sum(p_i*y_i) = p_real) -- exact even
+    # though pred_dist only lists scorelines that actually occurred
+    # in-sim (everything else is implicitly probability 0, contributing
+    # nothing to sum(p_i^2)).
+    multiclass_brier = statistics.mean(
+        sum(p * p for p in pred_dist.values()) - 2 * pred_dist.get(real, 0.0) + 1.0
+        for pred_dist, real in score_records)
+    print(f"\n=== Full scoreline distribution calibration ===")
+    print(f"Multiclass Brier score: {multiclass_brier:.4f} (0 = perfect; ranges higher than "
+          f"the binary win/loss Brier above since there are many more possible outcomes "
+          f"to get exactly right, not just 2)")
+
+    # Pooled probability-bucket calibration: every (trial, scoreline)
+    # pair the model assigned a nonzero probability to is one data
+    # point -- "did THIS specific scoreline happen in THIS trial" --
+    # exactly generalizing the win-probability bucket check above to
+    # every possible outcome instead of just win/loss.
+    pooled: list[tuple[float, bool]] = []
+    for pred_dist, real in score_records:
+        for score, p in pred_dist.items():
+            pooled.append((p, score == real))
+
+    print(f"\n{len(pooled)} (trial, predicted-scoreline) data points pooled across "
+          f"{n} trials.")
+    print(f"{'bucket':>12}  {'n':>7}  {'realized%':>10}  {'avg predicted%':>15}")
+    for lo in range(0, 100, 10):
+        hi = lo + 10
+        bucket = [(p, hit) for p, hit in pooled if lo / 100 <= p < hi / 100 or (hi == 100 and p == 1.0)]
+        if not bucket:
+            continue
+        realized = 100 * sum(1 for _, hit in bucket if hit) / len(bucket)
+        avg_pred = 100 * statistics.mean(p for p, _ in bucket)
+        print(f"{lo:>4}-{hi:<3}%    {len(bucket):>7}  {realized:>9.1f}%  {avg_pred:>14.1f}%")
+
+    # Curated common/low-scoreline frequency check -- the specific thing
+    # Dixon-Coles corrects for in a parametric model (0-0/1-0/0-1/1-1
+    # systematically off under an independence assumption). Checked
+    # directly here instead: for each of these scorelines, average
+    # predicted probability across ALL trials vs the fraction of trials
+    # where it was the actual outcome.
+    common = [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (0, 2), (2, 1), (1, 2), (2, 2)]
+    print(f"\nCommon-scoreline check (the Dixon-Coles low-score concern, "
+          f"checked directly against real outcomes instead of assumed):")
+    print(f"{'scoreline':>10}  {'avg predicted%':>15}  {'realized%':>10}")
+    for score in common:
+        avg_pred = 100 * statistics.mean(pred_dist.get(score, 0.0) for pred_dist, _ in score_records)
+        realized = 100 * sum(1 for _, real in score_records if real == score) / n
+        print(f"{score[0]}-{score[1]:>8}  {avg_pred:>14.1f}%  {realized:>9.1f}%")
+    other_pred = 100 * statistics.mean(
+        1.0 - sum(pred_dist.get(s, 0.0) for s in common) for pred_dist, _ in score_records)
+    other_real = 100 * sum(1 for _, real in score_records if real not in common) / n
+    print(f"{'other':>10}  {other_pred:>14.1f}%  {other_real:>9.1f}%")
 
 
 if __name__ == "__main__":
