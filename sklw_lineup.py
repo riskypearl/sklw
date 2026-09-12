@@ -1574,26 +1574,46 @@ def main():
             print(f"  {member_name}: could not fetch picks at all (bad manager ID?)")
             return
         forced_captain = None
+        is_wildcard = False
         if args.mode == "preview" and str(mid) in overrides:
             entry = overrides[str(mid)]
-            picks_data = apply_wildcard(picks_data, entry["wildcard"]) if "wildcard" in entry \
+            is_wildcard = "wildcard" in entry
+            picks_data = apply_wildcard(picks_data, entry["wildcard"]) if is_wildcard \
                 else apply_overrides(picks_data, entry)
             forced_captain = entry.get("tc_captain")
         print(f"\n=== {member_name} ===")
-        if forced_captain is not None:
+        if is_wildcard or forced_captain is not None:
+            # apply_wildcard sets every pick's multiplier to 1 (bench
+            # included, since a hand-typed squad has no real starter/
+            # bench distinction of its own) -- explain_manager's plain
+            # project_manager_score relies on multiplier>0 to find
+            # starters, so it would silently sum all 15 instead of 11 for
+            # a wildcard entry. Best-xi (what the main scoring loop
+            # ALWAYS uses for a wildcard regardless of TC) is the correct
+            # computation here, matching what actually feeds the lineup.
             starters, captain = pick_best_eleven(picks_data, players, points, forced_captain)
             score = project_best_xi_score(picks_data, players, points, forced_captain)
             cap_el = players.get(captain)
             cap_name = f"{cap_el['first_name']} {cap_el['second_name']}" if cap_el else "?"
-            print(f"Triple Captain override -- captaining {cap_name}")
+            if forced_captain is not None:
+                print(f"Triple Captain override -- captaining {cap_name}")
+            else:
+                print(f"Wildcard squad -- best-XI captain: {cap_name}")
             print("Best-XI squad:")
             for eid in starters:
                 el = players.get(eid)
                 pname = f"{el['first_name']} {el['second_name']}" if el else f"element #{eid}"
-                cap = " (C, TC)" if eid == captain else ""
+                cap = " (C, TC)" if eid == captain and forced_captain is not None else (" (C)" if eid == captain else "")
                 print(f"  {pname}{cap}: {points.get(eid, 0.0):.2f}")
-            print(f"\nComputed score: {score} (SKLW nets Triple Captain to a "
-                  f"normal x2 captain -- no extra adjustment beyond doubling)")
+            bench = [p["element"] for p in picks_data["picks"] if p["element"] not in starters]
+            print("Bench (not in best-XI, doesn't count):")
+            for eid in bench:
+                el = players.get(eid)
+                pname = f"{el['first_name']} {el['second_name']}" if el else f"element #{eid}"
+                print(f"  {pname}: {points.get(eid, 0.0):.2f}")
+            tc_note = (" (SKLW nets Triple Captain to a normal x2 captain -- "
+                       "no extra adjustment beyond doubling)") if forced_captain is not None else ""
+            print(f"\nComputed score: {score}{tc_note}")
         else:
             explain_manager(picks_data, gw_used, players, points)
         return

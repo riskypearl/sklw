@@ -291,6 +291,52 @@ class FindSolioCsvFreshnessTests(unittest.TestCase):
                 self.assertEqual(result, Path("solio.csv"), mod.__name__)
 
 
+class WildcardScoringTests(unittest.TestCase):
+    """apply_wildcard sets every pick's multiplier to 1, including the
+    bench (a hand-typed squad has no real starter/bench distinction of
+    its own). project_manager_score decides who's a "starter" by
+    multiplier>0 -- correct for real FPL data (bench genuinely has
+    multiplier 0), but for a wildcard-applied squad that means it
+    silently sums all 15 players instead of 11. Hit in practice: --explain
+    on a wildcarded manager showed an inflated score with all 4 bench
+    players folded in, even though the printed labels correctly said
+    which were bench. project_best_xi_score (what the main scoring loop
+    ALWAYS uses for a wildcard entry) doesn't have this problem -- it
+    computes the best valid XI from scratch, ignoring multiplier
+    entirely. This is why --explain now uses best-xi for wildcard
+    entries too instead of the plain (buggy, for this case)
+    project_manager_score path."""
+
+    def _build_squad(self):
+        players, points, eid = {}, {}, 1
+        for pos, count, base in [(1, 2, 10), (2, 5, 5), (3, 5, 5), (4, 3, 5)]:
+            for i in range(count):
+                players[eid] = {"first_name": "F", "second_name": f"P{eid}", "element_type": pos}
+                points[eid] = float(base + i)
+                eid += 1
+        picks_data = sklw_lineup.apply_wildcard({"picks": [{"element": i} for i in range(1, eid)]},
+                                                 list(range(1, eid)))
+        return picks_data, players, points, eid
+
+    def test_project_manager_score_wrongly_includes_bench_for_wildcard(self):
+        picks_data, players, points, eid = self._build_squad()
+        naive = sklw_lineup.project_manager_score(picks_data, points)
+        correct = sklw_lineup.project_best_xi_score(picks_data, players, points)
+        # documents the bug: naive sums ~all 15, correct only 11 + captain
+        self.assertNotEqual(naive, correct)
+        self.assertGreater(naive, correct)
+
+    def test_project_best_xi_score_correctly_excludes_bench(self):
+        picks_data, players, points, eid = self._build_squad()
+        starters, captain = sklw_lineup.pick_best_eleven(picks_data, players, points)
+        self.assertEqual(len(starters), 11)
+        bench = [i for i in range(1, eid) if i not in starters]
+        self.assertEqual(len(bench), 4)
+        # the 2 weakest of each outfield position group must be benched
+        self.assertIn(1, bench)  # weakest GK (point value 10, other GK is 11)
+        self.assertIn(3, bench)  # weakest DEF
+
+
 class BacktestMethodCTests(unittest.TestCase):
     """assign_method_c (GK-by-floor, Strikers-by-ceiling) was tested
     against real historical data and REJECTED -- it never beat method B
