@@ -33,11 +33,15 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+import shutil
+
 import backtest
 import build_clubs_json
 import calibrate_matchup
+import capture_sheet_screenshots
 import draft_lineup
 import fetch_master_list
+import parse_sheet_screenshots
 import resolve_matchup_roles
 import sklw_lineup
 import sklw_matchup
@@ -48,6 +52,13 @@ try:
     HAVE_OPENPYXL = True
 except ImportError:
     HAVE_OPENPYXL = False
+
+try:
+    import pytesseract
+    from PIL import Image, ImageDraw, ImageFont
+    HAVE_OCR = bool(shutil.which("tesseract"))
+except ImportError:
+    HAVE_OCR = False
 
 
 class H2HGoalsTests(unittest.TestCase):
@@ -900,6 +911,114 @@ class ResolveMatchupRolesTests(unittest.TestCase):
             pins = json.loads(Path(pins_path).read_text())
         self.assertEqual(pins["us"], {"gk_id": "12", "strikers_ids": "10,11"})
         self.assertEqual(pins["them"]["El Sin Nombre"], {"gk_id": "3", "strikers_ids": "1,2"})
+
+
+class CaptureSheetScreenshotsTests(unittest.TestCase):
+    """capture_sheet_screenshots.py is almost entirely Playwright-driven
+    (untestable without a live browser, same as fetch_solio.py -- no
+    coverage exists for that either). This locks in the one pure-logic
+    piece: which sheet tabs count as capture targets."""
+
+    def test_tab_name_regex_matches_live_scores_and_m_tabs(self):
+        for name in ("Live Scores", "M1", "M23", "M999"):
+            self.assertTrue(capture_sheet_screenshots.TAB_NAME_RE.match(name), name)
+
+    def test_tab_name_regex_rejects_other_tabs(self):
+        for name in ("LiveTables", "Sheet1", "M", "MA1", "Notes"):
+            self.assertFalse(capture_sheet_screenshots.TAB_NAME_RE.match(name), name)
+
+
+@unittest.skipUnless(HAVE_OCR, "pytesseract/PIL/tesseract binary not installed")
+class ParseSheetScreenshotsTests(unittest.TestCase):
+    """parse_sheet_screenshots.py exists because this account's Google
+    Drive download permission is disabled (confirmed live), so the
+    cleaner xlsx-based resolve_matchup_roles.py can't be used --
+    screenshots + OCR only need VIEWING access. Genuinely less reliable
+    than reading a real spreadsheet cell, so this locks in the specific
+    failure mode found and fixed while building it: run against a REAL
+    rendered image and REAL Tesseract OCR (not mocked), which caught an
+    actual bug -- with one handle OCR-missed, "topmost 3 matched
+    entries" silently substituted a Squad member for the real GK and
+    still reported a confident-looking (but wrong) 2-1 color split.
+    Fixed by requiring a full 16/16 match before ever attempting
+    GK/Strikers extraction; that fix is what these tests protect."""
+
+    def _font(self, size, bold=False):
+        path = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
+                else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            return ImageFont.load_default()
+
+    def _build_m1_image(self, path, drop_names: set[str] = frozenset()):
+        """Renders a real PNG of one club's GK+Strikers+Squad+Bench
+        block (16 rows, real fill colors) -- optionally omitting some
+        names entirely to simulate an OCR miss deterministically,
+        rather than depending on OCR actually failing to misread
+        something (unreliable to assert on)."""
+        BLUE, GREEN, GRAY, WHITE = (173, 216, 230), (198, 224, 180), (217, 217, 217), (255, 255, 255)
+        img = Image.new("RGB", (700, 900), "white")
+        d = ImageDraw.Draw(img)
+        font = self._font(20)
+        names = (["@LewisW_FF", "@fpl_flair", "@Ad_1net"] + [f"@LSquad{i}" for i in range(11)]
+                 + ["@LBench1", "@LBench2"])
+        fills = [BLUE, BLUE, WHITE] + [GREEN] * 11 + [GRAY, GRAY]
+        row_h = 40
+        for i, (name, fill) in enumerate(zip(names, fills)):
+            y = 20 + i * row_h
+            d.rectangle([10, y, 400, y + row_h - 4], fill=fill)
+            if name not in drop_names:
+                d.text((20, y + 8), name, fill="black", font=font)
+        img.save(path)
+
+    def test_real_ocr_full_match_extracts_correct_gk_strikers(self):
+        with tempfile.TemporaryDirectory() as d:
+            img_path = Path(d) / "M1.png"
+            self._build_m1_image(img_path)
+            roster = {"@LewisW_FF": 10, "@fpl_flair": 11, "@Ad_1net": 12,
+                      **{f"@LSquad{i}": 2000 + i for i in range(11)},
+                      "@LBench1": 13, "@LBench2": 14}
+            result = parse_sheet_screenshots.parse_matchup_tab(img_path, roster, {})
+        self.assertEqual(result["matched_count"], 16)
+        self.assertEqual(result["gk"], "@Ad_1net")
+        self.assertEqual(sorted(result["strikers"]), ["@LewisW_FF", "@fpl_flair"])
+        self.assertNotIn("warning", result)
+
+    def test_missed_handle_refuses_rather_than_guessing_wrong_gk(self):
+        """The actual bug found live: dropping the GK's own name (as a
+        stand-in for an OCR miss) must NOT silently promote a Squad
+        member into the GK slot -- it must refuse with a warning."""
+        with tempfile.TemporaryDirectory() as d:
+            img_path = Path(d) / "M1.png"
+            self._build_m1_image(img_path, drop_names={"@Ad_1net"})
+            roster = {"@LewisW_FF": 10, "@fpl_flair": 11, "@Ad_1net": 12,
+                      **{f"@LSquad{i}": 2000 + i for i in range(11)},
+                      "@LBench1": 13, "@LBench2": 14}
+            result = parse_sheet_screenshots.parse_matchup_tab(img_path, roster, {})
+        self.assertEqual(result["matched_count"], 15)
+        self.assertNotIn("gk", result)
+        self.assertIn("warning", result)
+
+    def test_fold_normalizes_single_char_ocr_confusion(self):
+        # Confirmed live: Tesseract really does misread "0" as "O" on
+        # real rendered handle text -- a same-length substitution, so
+        # folding alone makes these exactly equal.
+        self.assertEqual(parse_sheet_screenshots._fold("@LSquad0"),
+                          parse_sheet_screenshots._fold("@LSquadO"))
+
+    def test_fuzzy_match_handles_ocr_insertion_confusion(self):
+        # Confirmed live: Tesseract also misread "1" as the TWO
+        # characters "li" (an insertion, not a same-length substitution
+        # -- folding alone can't make "@Ad_1net" and "@Ad_linet" equal
+        # since they end up different lengths), so this needs the fuzzy
+        # fallback, not exact-fold equality.
+        roster = {"@Ad_1net": 12}
+        self.assertEqual(parse_sheet_screenshots.fuzzy_match_one("@Ad_linet", roster), "@Ad_1net")
+
+    def test_fuzzy_match_one_never_guesses_below_cutoff(self):
+        roster = {"@Ad_1net": 12}
+        self.assertIsNone(parse_sheet_screenshots.fuzzy_match_one("@CompletelyDifferent", roster))
 
 
 class VarianceScaleTests(unittest.TestCase):

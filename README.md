@@ -605,6 +605,62 @@ printed GK/Strikers names against what you can see in the sheet
 yourself before trusting it blindly, same caution as everything else
 mid-gameweek in this project.
 
+**If downloading is disabled for your account (`capture_sheet_
+screenshots.py` + `parse_sheet_screenshots.py`).** Confirmed live: a
+sheet owner can share view-only access with downloading/printing/
+copying specifically disabled, separate from just view access — no
+automation gets around that, since it's a genuine Drive permission, not
+a detection issue (a manual click in your own regular browser fails the
+same way). But a *screenshot* only needs viewing access, since it's
+just a picture of what's already rendered on screen. Two scripts:
+```
+python capture_sheet_screenshots.py
+python parse_sheet_screenshots.py --our-club "Algorithm"
+```
+`capture_sheet_screenshots.py` shares `fetch_sheet_workbook.py`'s
+browser profile/login — waits for you to click into the sheet, then
+automatically clicks through every "Live Scores"/"M#" tab in the tab
+bar (switching tabs within an already-open document is a same-page
+click, not the kind of navigation that gets flagged) and screenshots
+each one into `sheet_screenshots/`.
+
+`parse_sheet_screenshots.py` (`pip install pytesseract pillow`, plus
+the Tesseract OCR binary itself — not a pip package) OCRs those
+screenshots and samples pixel colors, instead of reading real
+spreadsheet cells like `resolve_matchup_roles.py` does — meaningfully
+less reliable, and validated accordingly: every extraction matches OCR
+text against a KNOWN candidate list (club names and handles already in
+`clubs.json`) rather than trying to parse generic layout from scratch,
+since matching against known candidates is the one OCR approach this
+project has already validated works (same idea `sklw_lineup.py`'s
+`--from-screenshot` uses against the real player list). Tested against
+a real rendered image with real Tesseract OCR (not mocked) while
+building this, which caught two genuine issues, both fixed:
+- Grayscale+upscale preprocessing (borrowed from `sklw_lineup.py`'s
+  `_from_screenshot`, tuned for a different problem — tiny text over a
+  busy graphical pitch background) actively broke OCR on this kind of
+  image, making entire rows vanish. Fixed by trying the raw image
+  first, since it read this kind of clean spreadsheet-style text
+  perfectly, and only falling back to the upscale if that finds too
+  little.
+- With even one handle OCR-missed, blindly taking "the topmost 3
+  matched entries" as the GK+Strikers block silently promoted a Squad
+  member into the GK slot — and the color check still found an
+  accidental 2-1 split among the WRONG 3 people, reporting a confident-
+  looking but wrong GK. Fixed by refusing outright unless ALL 16
+  handles for that club matched cleanly; a partial match prints a
+  warning and writes nothing rather than guessing.
+- Also normalizes classic OCR digit/letter mixups (`1`/`l`/`i`, `0`/`O`)
+  before comparing, confirmed live as a real, repeated failure mode on
+  rendered handle text.
+
+Real screenshots (actual browser anti-aliasing/compression, not a
+crisp synthetic test render) haven't been tested end-to-end yet — the
+refuse-rather-than-guess behavior above is the safety net for whatever
+OCR quirks show up for real that testing here couldn't anticipate.
+Expect occasional partial-match refusals; that's the deliberately safe
+failure mode, not a bug to chase away blindly.
+
 Picks up the SAME `overrides.json` `sklw_lineup.py` writes to — any
 `--wildcard`/`--transfer`/`--tc`/`--set-score` already recorded there
 applies automatically (matched by manager ID, works for either roster,
