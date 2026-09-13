@@ -102,27 +102,26 @@ def capture_tab(page, tab_name: str, out_dir: Path) -> bool:
     a plain screenshot only captures what's actually rendered -- there
     is no reliable "full page" capture for it the way there is for a
     normal scrollable webpage, since the grid manages its own internal
-    scroll rather than growing the page's scroll height. This zooms the
-    browser out first (more content fits in the same viewport, offset
-    by the higher device_scale_factor for OCR pixel density) as a
-    best-effort fit, but a tab wider/taller than that still won't be
-    fully captured -- confirmed only against the general approach, NOT
-    verified end-to-end against a real M# tab's actual content extent.
-    If parse_sheet_screenshots.py reports missing rows for a real tab,
-    the fix is either zooming out further or a real scroll-and-stitch
-    capture, neither implemented here yet."""
+    scroll rather than growing the page's scroll height. An earlier
+    version zoomed the browser out 3 steps here to fit more content, on
+    the assumption an M# tab (~18 rows) wouldn't fit the viewport
+    otherwise -- confirmed live against a REAL capture that assumption
+    was wrong: at the 1300px viewport height used here, ~18 rows fits
+    comfortably even at 100% zoom, and the zoom-out just made the text
+    smaller/blurrier, measurably hurting OCR quality on rows further
+    down the page (a real diagnostic run showed clean text near the top
+    degrading into garbage lower down). Removed. If a wider/taller real
+    tab genuinely doesn't fit at 100% zoom, the right fix is a real
+    scroll-and-stitch capture, not zooming out and accepting worse text
+    quality everywhere to maybe fit more somewhere."""
     tab = page.locator(".docs-sheet-tab-name", has_text=tab_name).first
     try:
         tab.click(timeout=10_000)
     except Exception:
         return False
-    page.wait_for_timeout(1_500)  # let the grid finish rendering/scrolling into view
-    for _ in range(3):
-        page.keyboard.press("Control+Minus")
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(2_500)  # let the grid finish rendering, including rows further from view
     safe_name = tab_name.replace(" ", "_")
     page.screenshot(path=str(out_dir / f"{safe_name}.png"))
-    page.keyboard.press("Control+0")  # reset zoom to 100% before the next tab
     return True
 
 
