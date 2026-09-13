@@ -700,12 +700,22 @@ side):
   order/punctuation.
 - Requiring a literal 16/16 handle match per club turned out to make
   the feature nearly unusable against real content (consistently
-  13-15/16). Replaced with a check for the actual failure mode instead
-  of raw count: the vertical gaps between the top-3 GK+Strikers
-  candidates are compared against the median row spacing for that
-  club — a silently skipped row shows up as roughly double the normal
-  gap. A miss elsewhere with consistent top-3 spacing now proceeds
-  (flagged for a spot-check); an inconsistent top-3 still refuses.
+  13-15/16). First replaced with a check on the vertical GAPS between
+  the top-3 candidates vs. the median row spacing — a silently skipped
+  row should show up as roughly double the normal gap. Confirmed live
+  with real numbers this doesn't actually work: the GK row's
+  LEGITIMATE extra height (it visually merges/spans more than a normal
+  row, to align with denser content on the opposing side) produces a
+  gap of the same magnitude as a genuine skip — two real examples from
+  the same capture had gap ratios of ~2.0x (a confirmed-CORRECT GK) and
+  ~1.9x (a confirmed-actual skip), statistically indistinguishable by
+  size alone. Replaced with a more direct test instead: does any of the
+  top-3 candidates share its sampled COLOR with the Squad's typical
+  color (sampled from confirmed Squad-position entries)? A Squad member
+  wrongly pulled into the top-3 would show up this way regardless of
+  position — a miss elsewhere with no Squad-colored top-3 entry now
+  proceeds (flagged for a spot-check); a Squad-colored top-3 candidate
+  still refuses.
 - The GK row's harder-to-read text (small/oddly-spaced due to the
   taller merged row) was often missed by the normal full-image OCR
   pass even though the more uniform Squad rows below read fine. Added

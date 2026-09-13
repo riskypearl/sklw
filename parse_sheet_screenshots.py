@@ -46,7 +46,6 @@ import argparse
 import difflib
 import json
 import re
-import statistics
 import sys
 import unicodedata
 from pathlib import Path
@@ -437,28 +436,41 @@ def classify_gk_strikers(image_path: Path, top_entries: list[dict]) -> tuple[str
     return None
 
 
-def _top3_gaps_consistent(entries: list[dict], tolerance: float = 1.5) -> bool:
-    """Checks that the vertical gaps between entries[0]-entries[1] and
-    entries[1]-entries[2] both look like a single real row's worth of
-    spacing, using the MEDIAN gap across ALL matched entries as the
-    reference row height. If a row were silently skipped somewhere
-    within the top 3 (the actual failure mode a full-match requirement
-    guards against -- see parse_matchup_tab), that specific gap would be
-    roughly double a normal row's spacing, which this catches directly.
-    Needs at least 4 entries to compute a reliable median (a couple of
-    misses elsewhere in the Squad/Bench are fine and expected on a real
-    capture; what matters is THIS specific 3-person block having no gap
-    in it)."""
-    if len(entries) < 4:
+def _top3_matches_squad_color(image_path: Path, entries: list[dict]) -> bool:
+    """Checks whether any of the top-3 candidates' sampled color matches
+    the Squad's typical color (sampled from entries[3:], confirmed real
+    Squad members) -- if so, that candidate is very likely a Squad
+    member wrongly pulled into the top-3 (the actual failure mode a
+    partial match risks), regardless of vertical position.
+
+    An earlier version compared the vertical GAPS between top-3
+    candidates against the overall median row spacing instead --
+    confirmed live with real numbers that this doesn't work: the GK
+    row's LEGITIMATE extra height (it visually merges/spans more than a
+    normal row, to align with denser content on the opposing side)
+    produces a gap of the same magnitude (~2x a normal row) as an
+    actual skipped row would. Two real examples from the same capture
+    had gap ratios of 85/42≈2.0 (a genuinely correct GK) and 81/42≈1.9
+    (an actual skip) -- statistically indistinguishable by gap size
+    alone. Color is a more direct test of the thing that actually
+    matters: is this candidate really NOT a Squad member. Needs at
+    least 3 Squad-position entries to know what "Squad color" looks
+    like; without enough data to check, doesn't flag anything (callers
+    fall back to trusting the color-split result alone)."""
+    if len(entries) < 6:
         return False
-    tops = sorted(e["top"] for e in entries)
-    gaps = [tops[i + 1] - tops[i] for i in range(len(tops) - 1)]
-    median_gap = statistics.median(gaps)
-    if median_gap <= 0:
-        return False
-    top3 = sorted(entries[:3], key=lambda e: e["top"])
-    top3_gaps = [top3[1]["top"] - top3[0]["top"], top3[2]["top"] - top3[1]["top"]]
-    return all(g <= median_gap * tolerance for g in top3_gaps)
+    from PIL import Image
+    img = Image.open(image_path)
+    squad_colors = [sample_color(img, e) for e in entries[3:8]]
+
+    def close(c1, c2, tol=20):
+        return all(abs(a - b) <= tol for a, b in zip(c1, c2))
+
+    for e in entries[:3]:
+        c = sample_color(img, e)
+        if any(close(c, sc) for sc in squad_colors):
+            return True
+    return False
 
 
 def parse_matchup_tab(image_path: Path, us_roster: dict[str, int], them_roster: dict[str, int]
@@ -475,40 +487,36 @@ def parse_matchup_tab(image_path: Path, us_roster: dict[str, int], them_roster: 
     to include a Squad member instead, and the color check can still
     find an accidental 2-1 split among the WRONG 3 people, reporting a
     confident-looking but wrong GK -- confirmed live this really
-    happens. An earlier version refused on ANY partial match to guard
-    against this, but real captures (denser/wider than a synthetic test
-    anticipated -- extra columns, more content) may realistically never
-    hit a clean 16/16, which would make this feature nearly unusable.
-    Instead, directly checks for the actual failure mode: if the gaps
-    between the top-3 candidates look like consistent single-row
-    spacing (see _top3_gaps_consistent), a miss further down in
-    Squad/Bench doesn't matter and this proceeds; only refuses when
-    that specific check fails, or fewer than 3 were matched at all."""
+    happens. Directly checks for the actual failure mode: does any of
+    the top-3 candidates share its color with the Squad's typical color
+    (see _top3_matches_squad_color) -- if so, it's very likely a Squad
+    member wrongly pulled in, so this refuses. Otherwise a miss further
+    down in Squad/Bench doesn't matter and this proceeds."""
     entries = resolve_handles_in_tab(image_path, us_roster)
     result: dict = {"matched_count": len(entries), "total_roster": len(us_roster)}
     if len(entries) < 3:
         result["warning"] = (f"only matched {len(entries)}/{len(us_roster)} handles -- "
                               f"not enough to even attempt GK/Strikers.")
         return result
-    if len(entries) < len(us_roster) and not _top3_gaps_consistent(entries):
-        result["warning"] = (f"only matched {len(entries)}/{len(us_roster)} handles, and "
-                              f"the top-3 candidates' spacing doesn't look like consistent "
-                              f"single rows -- refusing to guess GK/Strikers, a row may have "
-                              f"been silently skipped. Candidates were: "
+    if _top3_matches_squad_color(image_path, entries):
+        result["warning"] = (f"one of the top-3 candidates shares its color with the "
+                              f"Squad's typical color -- likely a Squad member wrongly pulled "
+                              f"in because a real GK/Strikers handle was missed by OCR. "
+                              f"Refusing to guess. Candidates were: "
                               f"{[e['handle'] for e in sorted(entries[:3], key=lambda e: e['top'])]}")
         return result
     gk_strikers = classify_gk_strikers(image_path, entries[:3])
     if gk_strikers is None:
-        result["warning"] = ("matched enough handles with consistent top-3 spacing but "
-                              "couldn't split them into a clean 2-1 by color -- pixel-"
-                              "sampling may have landed on the wrong spot. Candidates were: "
-                              f"{[e['handle'] for e in entries[:3]]}")
+        result["warning"] = ("matched enough handles and none of the top-3 looked "
+                              "Squad-colored, but couldn't split them into a clean 2-1 by "
+                              "color -- pixel-sampling may have landed on the wrong spot. "
+                              f"Candidates were: {[e['handle'] for e in entries[:3]]}")
         return result
     result["gk"], result["strikers"] = gk_strikers
     if len(entries) < len(us_roster):
-        result["warning"] = (f"only matched {len(entries)}/{len(us_roster)} handles, but the "
-                              f"top-3 GK/Strikers block had consistent spacing so this is "
-                              f"still trusted -- still worth a spot-check.")
+        result["warning"] = (f"only matched {len(entries)}/{len(us_roster)} handles, but "
+                              f"none of the top-3 looked Squad-colored, so this is still "
+                              f"trusted -- still worth a spot-check.")
     return result
 
 
