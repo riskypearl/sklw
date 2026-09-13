@@ -273,18 +273,17 @@ def _significant_words(name: str) -> list[str]:
     return [_fold(w) for w in re.findall(r"[A-Za-z0-9]+", name) if len(w) >= 2]
 
 
-def find_fixture_from_live_scores(image_path: Path, our_club_substring: str,
-                                   known_clubs: list[str]) -> tuple[str, str, str]:
-    """OCRs the LiveScores screenshot, finds the row containing our
-    club's name (fuzzy-matched against known_clubs, same style as
-    sklw_matchup.py's --opponent), and returns (m_label, our_full_name,
-    opponent_full_name) from that row. Errors clearly if our club isn't
-    found in exactly one row."""
+def find_all_fixtures(image_path: Path, known_clubs: list[str]) -> list[tuple[str, str, str]]:
+    """OCRs the LiveScores screenshot and returns every recognizable
+    (m_label, club_a, club_b) fixture row -- shared scanning logic
+    behind both this (used for league-wide sims, every fixture) and
+    find_fixture_from_live_scores (filtered to one club). A row counts
+    only when EXACTLY 2 known clubs are found in it (not "at least 2"
+    -- a real fixture row has exactly two sides; stray extra matches
+    would signal something's off, not a fixture to report)."""
     tokens = ocr_tokens(image_path)
     rows = group_into_rows(tokens)
-    needle = _fold(our_club_substring)
-
-    matches: list[tuple[str, str, str]] = []
+    results: list[tuple[str, str, str]] = []
     for row in rows:
         row_text = " ".join(t["text"] for t in sorted(row, key=lambda t: t["left"]))
         folded_row = _fold(row_text)
@@ -297,11 +296,25 @@ def find_fixture_from_live_scores(image_path: Path, our_club_substring: str,
         # whole name as one exact contiguous substring
         present = [c for c in known_clubs
                    if _significant_words(c) and all(w in folded_row for w in _significant_words(c))]
-        matched_ours = [c for c in present if needle in _fold(c)]
-        if matched_ours and len(present) >= 2:
-            opponent = next((c for c in present if c not in matched_ours), None)
-            if opponent:
-                matches.append((m_label_tok.upper(), matched_ours[0], opponent))
+        if len(present) == 2:
+            results.append((m_label_tok.upper(), present[0], present[1]))
+    return results
+
+
+def find_fixture_from_live_scores(image_path: Path, our_club_substring: str,
+                                   known_clubs: list[str]) -> tuple[str, str, str]:
+    """Finds the fixture row containing our club's name (fuzzy-matched
+    against known_clubs, same style as sklw_matchup.py's --opponent),
+    and returns (m_label, our_full_name, opponent_full_name) with our
+    club always first. Errors clearly if our club isn't found in
+    exactly one row."""
+    needle = _fold(our_club_substring)
+    matches: list[tuple[str, str, str]] = []
+    for m_label, a, b in find_all_fixtures(image_path, known_clubs):
+        if needle in _fold(a):
+            matches.append((m_label, a, b))
+        elif needle in _fold(b):
+            matches.append((m_label, b, a))
 
     if not matches:
         print(f"ERROR: '{our_club_substring}' didn't match any recognizable row in "

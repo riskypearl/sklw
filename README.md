@@ -1004,6 +1004,58 @@ mildly under-spread** (real matches land on rarer, higher-margin
 scorelines slightly more often than the simulation predicts). Treat any
 single scoreline probability as approximate.
 
+## League-wide simulation (`league_wide_sim.py`)
+
+Runs the same win-probability simulation for EVERY fixture in the
+league for the current gameweek, not just your own. What makes this
+possible at all: simulating another club's outcome doesn't need
+guessing/solving their GK+Strikers choice (genuinely hard, would need
+something like a full squad-selection solver for every other club) --
+every club already records its own real GK/Strikers picks in the same
+sheet (see the screenshot section above), so this reads what every
+club actually declared instead of solving anything.
+
+```
+python capture_sheet_screenshots.py
+python league_wide_sim.py
+```
+
+**This is the one place in the project that breaks the "no shared
+imports between the tools" convention on purpose.** The simulation
+engine (live-pick fetching, real auto-sub prediction, the Monte Carlo
+sim itself) is ~1000 lines of correctness-sensitive logic in
+`sklw_matchup.py` -- hand-duplicating that once per fixture (~23 times)
+would be far riskier than importing it once and calling it repeatedly;
+a fix to the engine reaches this automatically instead of needing to be
+repeated by hand in a second copy. `league_wide_sim.py` imports
+`sklw_matchup.py` and `parse_sheet_screenshots.py` directly.
+
+For each fixture found in the `LiveScores` screenshot: reads both
+clubs' real GK/Strikers off that fixture's `M#` tab screenshot (same
+OCR + color approach as the single-matchup screenshot pipeline, same
+"genuinely less reliable than a real cell" caveat — doubled here, since
+a bad read on EITHER club silently skips that whole fixture rather than
+guessing), looks up both rosters in `clubs.json`, fetches all 32
+managers' real live FPL data, and runs the identical simulation
+`sklw_matchup.py` runs for one matchup.
+
+**Scale warning**: league-wide means fetching live picks for every
+manager in every club (47 clubs × 16 managers = 752 people here, vs. 32
+for a single matchup) plus the same once-per-run historical variance
+model `sklw_matchup.py` already fetches. Expect this to take several
+minutes, and it's far more likely to hit FPL's own rate limits than a
+normal single-matchup run — `--delay` (default 0.3s) adds a pause
+between each club's fetch as a basic safety margin, not a guarantee.
+`--sims` defaults to 2000 per fixture (lower than `sklw_matchup.py`'s
+5000) since this runs the simulation ~23 times in one go.
+
+A fixture is skipped (not guessed at) if its `M#` screenshot is
+missing, or if GK/Strikers couldn't be cleanly determined for either
+club, or if fewer than 15 of either club's 16 managers' picks could be
+fetched — same floor `sklw_matchup.py`'s own single-matchup run uses.
+Results print live as each fixture finishes, then again as a summary
+table at the end.
+
 ## Known gaps / next steps
 
 - Exact scoreline predictions are mildly under-spread (see the

@@ -41,6 +41,7 @@ import calibrate_matchup
 import capture_sheet_screenshots
 import draft_lineup
 import fetch_master_list
+import league_wide_sim
 import parse_sheet_screenshots
 import resolve_matchup_roles
 import sklw_lineup
@@ -1145,6 +1146,152 @@ class ParseSheetScreenshotsTests(unittest.TestCase):
                    if parse_sheet_screenshots._significant_words(c)
                    and all(w in folded_row for w in parse_sheet_screenshots._significant_words(c))]
         self.assertEqual(sorted(present), ["Algorithm & Blues", "The Galacticos"])
+
+    def _build_live_scores_image(self, path):
+        img = Image.new("RGB", (900, 200), "white")
+        d = ImageDraw.Draw(img)
+        font = self._font(20)
+        rows = [
+            ("M1", "Netflix & Chilwell", "0", "4", "El Sin Nombre"),
+            ("M20", "The Galacticos", "3", "0", "Algorithm & Blues"),
+        ]
+        y = 20
+        for m, a, sa, sb, b in rows:
+            d.text((20, y), m, fill="black", font=font)
+            d.text((100, y), a, fill="black", font=font)
+            d.text((400, y), sa, fill="black", font=font)
+            d.text((450, y), sb, fill="black", font=font)
+            d.text((520, y), b, fill="black", font=font)
+            y += 40
+        img.save(path)
+
+    def test_find_all_fixtures_returns_every_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            img_path = Path(d) / "LiveScores.png"
+            self._build_live_scores_image(img_path)
+            known_clubs = ["Netflix & Chilwell", "El Sin Nombre", "The Galacticos", "Algorithm & Blues"]
+            fixtures = parse_sheet_screenshots.find_all_fixtures(img_path, known_clubs)
+        self.assertEqual(sorted(fixtures), sorted([
+            ("M1", "Netflix & Chilwell", "El Sin Nombre"),
+            ("M20", "The Galacticos", "Algorithm & Blues"),
+        ]))
+
+    def test_find_fixture_from_live_scores_still_filters_to_one_club(self):
+        with tempfile.TemporaryDirectory() as d:
+            img_path = Path(d) / "LiveScores.png"
+            self._build_live_scores_image(img_path)
+            known_clubs = ["Netflix & Chilwell", "El Sin Nombre", "The Galacticos", "Algorithm & Blues"]
+            result = parse_sheet_screenshots.find_fixture_from_live_scores(img_path, "Algorithm", known_clubs)
+        self.assertEqual(result, ("M20", "Algorithm & Blues", "The Galacticos"))
+
+
+@unittest.skipUnless(HAVE_OCR, "pytesseract/PIL/tesseract binary not installed")
+class LeagueWideSimTests(unittest.TestCase):
+    """league_wide_sim.py deliberately imports sklw_matchup.py directly
+    (a real exception to this project's usual no-shared-imports
+    convention -- see that file's module docstring for why) to reuse
+    its simulation engine across every league fixture instead of
+    hand-duplicating ~1000 lines of correctness-sensitive logic. The
+    live-data-fetching parts (build_club_scores, run_simulation) need a
+    real FPL API connection this test environment doesn't have, so
+    those are mocked here to check the WIRING is correct (right
+    arguments, right order) without needing network access; the real-
+    data-free role extraction is tested for real against a synthetic
+    screenshot, same as ParseSheetScreenshotsTests."""
+
+    def _font(self, size, bold=False):
+        path = ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
+                else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            return ImageFont.load_default()
+
+    def _build_m1_image(self, path):
+        BLUE, GREEN, GRAY, WHITE = (173, 216, 230), (198, 224, 180), (217, 217, 217), (255, 255, 255)
+        img = Image.new("RGB", (700, 900), "white")
+        d = ImageDraw.Draw(img)
+        font = self._font(20)
+        left = (["@LewisW_FF", "@fpl_flair", "@Ad_1net"] + [f"@LSquad{i}" for i in range(11)]
+                + ["@LBench1", "@LBench2"])
+        left_fills = [BLUE, BLUE, WHITE] + [GREEN] * 11 + [GRAY, GRAY]
+        right = (["@Fplmode", "@Frankwalsh82", "@Bobbylovefpl"] + [f"@RSquad{i}" for i in range(11)]
+                 + ["@RBench1", "@RBench2"])
+        right_fills = [BLUE, BLUE, WHITE] + [GREEN] * 11 + [GRAY, GRAY]
+        for i in range(16):
+            y = 20 + i * 40
+            d.rectangle([10, y, 400, y + 36], fill=left_fills[i])
+            d.text((20, y + 8), left[i], fill="black", font=font)
+            d.rectangle([420, y, 690, y + 36], fill=right_fills[i])
+            d.text((430, y + 8), right[i], fill="black", font=font)
+        img.save(path)
+
+    def test_extract_roles_for_fixture_returns_both_sides(self):
+        with tempfile.TemporaryDirectory() as d:
+            shots_dir = Path(d)
+            self._build_m1_image(shots_dir / "M1.png")
+            clubs = {
+                "Netflix & Chilwell": ({f"@LSquad{i}": 2000 + i for i in range(11)}
+                                       | {"@LewisW_FF": 10, "@fpl_flair": 11, "@Ad_1net": 12,
+                                          "@LBench1": 13, "@LBench2": 14}),
+                "El Sin Nombre": ({f"@RSquad{i}": 3000 + i for i in range(11)}
+                                  | {"@Fplmode": 1, "@Frankwalsh82": 2, "@Bobbylovefpl": 3,
+                                     "@RBench1": 4, "@RBench2": 5}),
+            }
+            roles = league_wide_sim.extract_roles_for_fixture(
+                shots_dir, "M1", "Netflix & Chilwell", "El Sin Nombre", clubs)
+        self.assertIsNotNone(roles)
+        result_a, result_b = roles
+        self.assertEqual(result_a["gk"], "@Ad_1net")
+        self.assertEqual(sorted(result_a["strikers"]), ["@LewisW_FF", "@fpl_flair"])
+        self.assertEqual(result_b["gk"], "@Bobbylovefpl")
+        self.assertEqual(sorted(result_b["strikers"]), ["@Fplmode", "@Frankwalsh82"])
+
+    def test_extract_roles_for_fixture_missing_tab_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            roles = league_wide_sim.extract_roles_for_fixture(
+                Path(d), "M99", "Club A", "Club B", {"Club A": {}, "Club B": {}})
+        self.assertIsNone(roles)
+
+    def test_simulate_fixture_wires_forced_roles_and_skips_on_low_managers(self):
+        """Mocked test: confirms the actual call wiring (build_club_scores
+        called for both sides, assign_roles receives the extracted GK/
+        Strikers as forced picks, run_simulation gets both assigned
+        roles) is correct, and that the len(club) < 15 floor
+        sklw_matchup.py's own main() uses is respected here too --
+        without needing a real FPL connection."""
+        roster_a = {f"m{i}": i for i in range(16)}
+        roster_b = {f"n{i}": i for i in range(16)}
+        roles_a_pins = {"gk": "m0", "strikers": ["m1", "m2"]}
+        roles_b_pins = {"gk": "n0", "strikers": ["n1", "n2"]}
+
+        with mock.patch.object(sklw_matchup, "build_club_scores") as mock_build, \
+             mock.patch.object(sklw_matchup, "assign_roles") as mock_assign, \
+             mock.patch.object(sklw_matchup, "run_simulation") as mock_run:
+            # Full rosters (16 each) on both sides -- should proceed.
+            mock_build.side_effect = [
+                ({f"m{i}": {} for i in range(16)}, []),
+                ({f"n{i}": {} for i in range(16)}, []),
+            ]
+            mock_assign.side_effect = [{"gk": ["m0"]}, {"gk": ["n0"]}]
+            mock_run.return_value = {"win_pct": 50.0}
+            result = league_wide_sim.simulate_fixture(
+                random.Random(1), roster_a, roles_a_pins, roster_b, roles_b_pins,
+                {}, {}, 3, 4, {}, {}, {}, {}, {}, {}, {}, {}, 100)
+            self.assertEqual(result, {"win_pct": 50.0})
+            mock_assign.assert_any_call({f"m{i}": {} for i in range(16)}, "m0", {"m1", "m2"})
+            mock_assign.assert_any_call({f"n{i}": {} for i in range(16)}, "n0", {"n1", "n2"})
+
+        with mock.patch.object(sklw_matchup, "build_club_scores") as mock_build:
+            # Only 10 managers fetched on one side -- below the 15 floor.
+            mock_build.side_effect = [
+                ({f"m{i}": {} for i in range(10)}, [f"m{i}" for i in range(10, 16)]),
+                ({f"n{i}": {} for i in range(16)}, []),
+            ]
+            result = league_wide_sim.simulate_fixture(
+                random.Random(1), roster_a, roles_a_pins, roster_b, roles_b_pins,
+                {}, {}, 3, 4, {}, {}, {}, {}, {}, {}, {}, {}, 100)
+            self.assertIsNone(result)
 
 
 class VarianceScaleTests(unittest.TestCase):
