@@ -96,6 +96,25 @@ def _prep_image(img):
     return img
 
 
+def _setup_tesseract() -> None:
+    """Same fallback sklw_lineup.py's --from-screenshot already needed:
+    the Tesseract OCR binary (a separate install from the pytesseract
+    pip package) often isn't added to PATH automatically on Windows,
+    even after installing it -- check the standard install location
+    before giving up."""
+    import shutil
+    import pytesseract
+
+    if not shutil.which("tesseract"):
+        for candidate in (
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ):
+            if Path(candidate).exists():
+                pytesseract.pytesseract.tesseract_cmd = candidate
+                break
+
+
 def _ocr_pass(img, scale: float) -> list[dict]:
     """One OCR attempt over `img`, returning tokens rescaled back to the
     ORIGINAL image's pixel coordinates (scale = img.width / original
@@ -337,6 +356,15 @@ def main():
     except ImportError:
         print("ERROR: pytesseract/pillow aren't installed -- run: pip install pytesseract pillow "
               "(and install the Tesseract OCR binary itself, see module docstring)")
+        sys.exit(1)
+    _setup_tesseract()
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception:
+        print("ERROR: the Tesseract OCR binary itself isn't installed (or not "
+              "on PATH, and not in the usual Windows install location either) "
+              "-- this is separate from the pytesseract pip package. Install it: "
+              "https://github.com/UB-Mannheim/tesseract/wiki")
         sys.exit(1)
 
     shots_dir = Path(args.screenshots_dir)
