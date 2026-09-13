@@ -115,13 +115,35 @@ def _setup_tesseract() -> None:
                 break
 
 
-def _ocr_pass(img, scale: float) -> list[dict]:
-    """One OCR attempt over `img`, returning tokens rescaled back to the
-    ORIGINAL image's pixel coordinates (scale = img.width / original
-    image's width) so callers can sample colors from the original color
-    image regardless of which pass produced the token."""
+# PSM 11 ("sparse text: find as much text as possible in no particular
+# order") is what sklw_lineup.py's screenshot OCR uses, tuned for tiny
+# name-tag text scattered across a busy graphical pitch background --
+# copied here on the assumption it'd generalize. Confirmed live it
+# does NOT: against a real captured LiveScores tab (a clean, genuinely
+# tabular grid -- nothing like a pitch view), the very first row read
+# perfectly but every row below it came back badly garbled, while the
+# actual image is clearly legible to a human throughout. PSM 11's
+# sparse-text segmentation is the wrong tool for a real table -- it's
+# built to find scattered fragments, not parse a regular grid. PSM 6
+# ("assume a single uniform block of text") and PSM 4 ("assume a
+# single column of text of variable sizes") are both meant for
+# actual structured documents/tables instead. Rather than betting on
+# one specific mode being the real fix (untested against the actual
+# failure), this tries all three and merges every token found across
+# them -- downstream matching only needs ONE clean read of a given
+# handle/name from ANY pass to succeed, so more attempts strictly
+# helps rather than requiring a single "best" mode to be identified.
+_PSM_MODES = (6, 11, 4)
+
+
+def _ocr_pass(img, scale: float, psm: int) -> list[dict]:
+    """One OCR attempt over `img` at a given Tesseract page segmentation
+    mode, returning tokens rescaled back to the ORIGINAL image's pixel
+    coordinates (scale = img.width / original image's width) so callers
+    can sample colors from the original color image regardless of which
+    pass produced the token."""
     import pytesseract
-    data = pytesseract.image_to_data(img, config="--psm 11", output_type=pytesseract.Output.DICT)
+    data = pytesseract.image_to_data(img, config=f"--psm {psm}", output_type=pytesseract.Output.DICT)
     tokens = []
     for i, text in enumerate(data["text"]):
         text = text.strip()
@@ -137,28 +159,49 @@ def _ocr_pass(img, scale: float) -> list[dict]:
     return tokens
 
 
+def _dedupe_tokens(tokens: list[dict], pos_tolerance: int = 5) -> list[dict]:
+    """Multiple PSM passes over the SAME image mostly rediscover the
+    SAME real text at nearly the same position -- merging their tokens
+    without deduplication left every word appearing once per pass (3x),
+    which silently broke row-text reconstruction elsewhere (e.g.
+    find_fixture_from_live_scores's substring check expects "word1
+    word2 word3", not "word1 word1 word1 word2 word2 word2..."; a real
+    bug caught testing this against real multi-pass output). Collapses
+    same-text tokens whose positions are within `pos_tolerance` px of
+    each other into one, keeping the first occurrence."""
+    kept: list[dict] = []
+    for t in tokens:
+        if any(t["text"] == k["text"] and abs(t["left"] - k["left"]) <= pos_tolerance
+               and abs(t["top"] - k["top"]) <= pos_tolerance for k in kept):
+            continue
+        kept.append(t)
+    return kept
+
+
 def ocr_tokens(image_path: Path, min_tokens: int = 5) -> list[dict]:
     """Returns [{"text", "left", "top", "width", "height"}, ...] in the
-    ORIGINAL image's pixel coordinates. Tries the raw image first
-    (confirmed live: reliable for clean spreadsheet-style screenshots),
-    only falling back to the grayscale+upscale prep (see _prep_image) if
-    the raw pass suspiciously finds fewer than `min_tokens` -- e.g. a
-    genuinely low-resolution capture, where the sklw_lineup.py-style
-    upscale might actually help rather than hurt. Uses whichever pass
-    found more, since a real screenshot's exact behavior isn't fully
-    known ahead of time (this account's real captures haven't been
-    validated end-to-end yet -- see module docstring)."""
+    ORIGINAL image's pixel coordinates -- the deduplicated union of
+    every token found across all of _PSM_MODES on the raw image
+    (confirmed live: reliable for clean spreadsheet-style screenshots,
+    no need for the grayscale+upscale prep in the normal case). Only
+    falls back to also trying _prep_image's upscale (on top of the same
+    PSM sweep) if the raw passes together suspiciously find fewer than
+    `min_tokens` -- e.g. a genuinely low-resolution capture."""
     from PIL import Image
 
     original = Image.open(image_path)
-    raw_tokens = _ocr_pass(original, scale=1.0)
-    if len(raw_tokens) >= min_tokens:
-        return raw_tokens
+    tokens: list[dict] = []
+    for psm in _PSM_MODES:
+        tokens.extend(_ocr_pass(original, scale=1.0, psm=psm))
+    tokens = _dedupe_tokens(tokens)
+    if len(tokens) >= min_tokens:
+        return tokens
 
     prepped = _prep_image(original)
     scale = prepped.width / original.width
-    prepped_tokens = _ocr_pass(prepped, scale)
-    return prepped_tokens if len(prepped_tokens) > len(raw_tokens) else raw_tokens
+    for psm in _PSM_MODES:
+        tokens.extend(_ocr_pass(prepped, scale, psm))
+    return _dedupe_tokens(tokens)
 
 
 def group_into_rows(tokens: list[dict], y_tolerance: int = 12) -> list[list[dict]]:
@@ -181,15 +224,22 @@ def group_into_rows(tokens: list[dict], y_tolerance: int = 12) -> list[list[dict
 
 
 def sample_color(img, token: dict) -> tuple[int, int, int]:
-    """Samples the average RGB a few pixels below the token's text
-    baseline, within its own row -- avoids the token's own (usually
-    dark) text pixels while staying inside the same cell's fill color.
-    Rough heuristic, not pixel-measured against a real example -- same
-    honesty as sklw_lineup.py's _PITCH_LAYOUT comment. If this
-    misclassifies GK/Strikers on a real screenshot, the fix is
-    recalibrating the offset here against real capture output."""
-    x = token["left"] + token["width"] // 2
-    y = token["top"] + token["height"] + 3
+    """Samples the average RGB a few pixels to the right of the token's
+    own text, at its OWN vertical center -- avoids the token's (usually
+    dark) text pixels while staying guaranteed inside its own row.
+
+    An earlier version sampled a fixed few pixels BELOW the token's
+    bounding box instead -- confirmed live via real (not mocked) OCR
+    output that this overshoots for any token whose reported height is
+    taller than usual (e.g. text with descenders like 'p'/'g'/'y'
+    inflates Tesseract's bounding box height), landing in the gap
+    between rows and sampling the wrong color entirely -- caught
+    exactly this misclassifying a real GK as a Striker in testing.
+    Sampling at the token's OWN vertical center instead can't overshoot
+    regardless of its height, since the center is always within its own
+    bounding box by definition."""
+    x = token["left"] + token["width"] + 5
+    y = token["top"] + token["height"] // 2
     x = max(0, min(img.width - 1, x))
     y = max(0, min(img.height - 1, y))
     px = img.convert("RGB").getpixel((x, y))

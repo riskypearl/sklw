@@ -654,12 +654,36 @@ building this, which caught two genuine issues, both fixed:
   before comparing, confirmed live as a real, repeated failure mode on
   rendered handle text.
 
-Real screenshots (actual browser anti-aliasing/compression, not a
-crisp synthetic test render) haven't been tested end-to-end yet — the
-refuse-rather-than-guess behavior above is the safety net for whatever
-OCR quirks show up for real that testing here couldn't anticipate.
-Expect occasional partial-match refusals; that's the deliberately safe
-failure mode, not a bug to chase away blindly.
+Also tested against a REAL captured screenshot of the actual sheet (not
+just a synthetic render), which caught two more real issues:
+- `--psm 11` ("sparse text: find fragments in no particular order") is
+  what `sklw_lineup.py`'s pitch-view OCR uses, and was copied here on
+  the assumption it'd generalize — it doesn't. Against a real
+  `LiveScores` capture (a clean, genuinely tabular grid, nothing like a
+  scattered pitch view), the first row read perfectly and every row
+  below came back badly garbled, even though the actual image is
+  clearly legible to a human throughout — PSM 11's segmentation is
+  built for scattered fragments, not a real table. Fixed by trying
+  multiple PSM modes (6, 11, 4) and merging every token found across
+  them, deduplicated, rather than betting on one specific mode being
+  correct for content this project can't fully test ahead of time.
+- Color-sampling originally looked a few pixels BELOW a token's
+  bounding box — overshoots for any token whose height comes back
+  taller than usual (text with descenders like "p"/"g"/"y" inflates
+  Tesseract's reported box height), landing in the gap between rows
+  and sampling the wrong color. Caught this live actually
+  misclassifying a real GK as a Striker. Fixed by sampling at the
+  token's own vertical CENTER instead (to the right of the text, not
+  below it) — that point is inside the token's own bounding box by
+  definition, so it can't overshoot into the next row regardless of
+  height.
+
+Both were found and fixed using the same real screenshot, so this has
+now been validated end-to-end against actual sheet content, not just a
+synthetic test render — though "expect occasional partial-match
+refusals" (a single OCR-missed handle, usually a borderline
+digit/letter misread that doesn't clear the fuzzy cutoff) is still the
+deliberately safe failure mode, not a bug to chase away blindly.
 
 Picks up the SAME `overrides.json` `sklw_lineup.py` writes to — any
 `--wildcard`/`--transfer`/`--tc`/`--set-score` already recorded there
