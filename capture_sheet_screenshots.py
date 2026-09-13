@@ -1,5 +1,5 @@
 """Screenshots every relevant tab of the SKLW master Google Sheet
-workbook (the "Live Scores" tab plus every "M#" fixture tab), for
+workbook (the "LiveScores" tab plus every "M#" fixture tab), for
 parse_sheet_screenshots.py to OCR afterwards.
 
 Standalone script, separate from fetch_sheet_workbook.py -- that one
@@ -48,7 +48,7 @@ Normal use:
     python capture_sheet_screenshots.py
         (opens the Sheets home page -- click into the SKLW sheet
         yourself, press Enter once you can see it open, and every
-        "Live Scores"/"M#" tab gets clicked through and screenshotted
+        "LiveScores"/"M#" tab gets clicked through and screenshotted
         automatically into sheet_screenshots/)
 
 Feed the resulting sheet_screenshots/ folder into
@@ -64,7 +64,7 @@ OUT_DIR = Path(__file__).parent / "sheet_screenshots"
 
 _LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
 
-TAB_NAME_RE = re.compile(r"^(Live Scores|M\d+)$")
+TAB_NAME_RE = re.compile(r"^(LiveScores|M\d+)$")
 
 
 def _launch_context(p):
@@ -80,7 +80,7 @@ def _launch_context(p):
 
 def discover_tabs(page) -> list[str]:
     """Reads the sheet tab bar at the bottom of the window for every tab
-    matching 'Live Scores' or 'M<number>' -- doesn't hardcode which
+    matching 'LiveScores' or 'M<number>' -- doesn't hardcode which
     M-numbers exist, since the league's tab count can change season to
     season."""
     names = page.eval_on_selector_all(
@@ -161,7 +161,7 @@ def main():
 
             tabs = discover_tabs(page)
             if not tabs:
-                print("ERROR: couldn't find any 'Live Scores' or 'M#' tabs "
+                print("ERROR: couldn't find any 'LiveScores' or 'M#' tabs "
                       "in the tab bar -- is this actually the SKLW sheet? "
                       "Nothing captured.")
                 context.close()

@@ -192,7 +192,7 @@ def fuzzy_match_one(text: str, candidates: dict[str, int]) -> str | None:
 
 def find_fixture_from_live_scores(image_path: Path, our_club_substring: str,
                                    known_clubs: list[str]) -> tuple[str, str, str]:
-    """OCRs the Live Scores screenshot, finds the row containing our
+    """OCRs the LiveScores screenshot, finds the row containing our
     club's name (fuzzy-matched against known_clubs, same style as
     sklw_matchup.py's --opponent), and returns (m_label, our_full_name,
     opponent_full_name) from that row. Errors clearly if our club isn't
@@ -218,7 +218,7 @@ def find_fixture_from_live_scores(image_path: Path, our_club_substring: str,
 
     if not matches:
         print(f"ERROR: '{our_club_substring}' didn't match any recognizable row in "
-              f"the Live Scores screenshot (OCR may have missed it -- check the "
+              f"the LiveScores screenshot (OCR may have missed it -- check the "
               f"image manually). Nothing found.")
         sys.exit(1)
     if len(matches) > 1:
@@ -340,7 +340,7 @@ def main():
         sys.exit(1)
 
     shots_dir = Path(args.screenshots_dir)
-    live_scores_path = shots_dir / "Live_Scores.png"
+    live_scores_path = shots_dir / "LiveScores.png"
     if not live_scores_path.exists():
         print(f"ERROR: no {live_scores_path} -- run capture_sheet_screenshots.py first.")
         sys.exit(1)

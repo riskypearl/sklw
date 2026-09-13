@@ -11,7 +11,7 @@ which needs a real login. Separate from that script and from
 sklw_matchup.py per this project's usual convention.
 
 How the sheet is read (confirmed against a real example, see README):
-  - "Live Scores" tab: one row per fixture, columns (in no particular
+  - "LiveScores" tab: one row per fixture, columns (in no particular
     fixed order -- found by scanning for text, not fixed column
     letters, since the exact layout couldn't be inspected ahead of
     time): an "M<N>" label, and the two clubs' names. Whichever row
@@ -40,7 +40,7 @@ import json
 import sys
 from pathlib import Path
 
-LIVE_SCORES_SHEET = "Live Scores"
+LIVE_SCORES_SHEET = "LiveScores"
 
 
 def _text_cells(row_cells) -> list[tuple[int, str]]:
@@ -55,7 +55,7 @@ def _text_cells(row_cells) -> list[tuple[int, str]]:
 
 
 def find_fixture(wb, our_club_substring: str) -> tuple[str, str, str]:
-    """Scans the Live Scores sheet for the row naming our club (a
+    """Scans the LiveScores sheet for the row naming our club (a
     case-insensitive substring match, same style as sklw_matchup.py's
     --opponent). Returns (m_label, our_full_name, opponent_full_name).
     Errors clearly (not a silent guess) if the tab is missing, or if

@@ -551,7 +551,7 @@ club, who's actually playing GK and Strikers each week — but that's
 only readable from the FORMATTED sheet, not a plain CSV: it's shown by
 cell background color (2 blue-filled rows = Strikers, the third,
 differently-filled row = GK), not a text label, and CSV export throws
-color away entirely. It's also on a tab ("Live Scores") that turned out
+color away entirely. It's also on a tab ("LiveScores") that turned out
 not to be shared publicly (401'd, same as the master list), and
 fixtures are redrawn fresh every week rather than following a fixed
 schedule, so there's no way to hardcode which club plays which tab in
@@ -619,7 +619,7 @@ python parse_sheet_screenshots.py --our-club "Algorithm"
 ```
 `capture_sheet_screenshots.py` shares `fetch_sheet_workbook.py`'s
 browser profile/login — waits for you to click into the sheet, then
-automatically clicks through every "Live Scores"/"M#" tab in the tab
+automatically clicks through every "LiveScores"/"M#" tab in the tab
 bar (switching tabs within an already-open document is a same-page
 click, not the kind of navigation that gets flagged) and screenshots
 each one into `sheet_screenshots/`.

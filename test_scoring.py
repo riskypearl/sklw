@@ -797,7 +797,7 @@ class ResolveMatchupRolesTests(unittest.TestCase):
     def _build_workbook(self):
         wb = openpyxl.Workbook()
         live = wb.active
-        live.title = "Live Scores"
+        live.title = "LiveScores"
         rows = [
             ("M1", "Netflix & Chilwell", 0, 4, "El Sin Nombre"),
             ("M20", "The Galacticos", 3, 0, "Algorithm & Blues"),
@@ -920,7 +920,7 @@ class CaptureSheetScreenshotsTests(unittest.TestCase):
     piece: which sheet tabs count as capture targets."""
 
     def test_tab_name_regex_matches_live_scores_and_m_tabs(self):
-        for name in ("Live Scores", "M1", "M23", "M999"):
+        for name in ("LiveScores", "M1", "M23", "M999"):
             self.assertTrue(capture_sheet_screenshots.TAB_NAME_RE.match(name), name)
 
     def test_tab_name_regex_rejects_other_tabs(self):
