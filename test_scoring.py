@@ -1020,6 +1020,43 @@ class ParseSheetScreenshotsTests(unittest.TestCase):
         roster = {"@Ad_1net": 12}
         self.assertIsNone(parse_sheet_screenshots.fuzzy_match_one("@CompletelyDifferent", roster))
 
+    def test_significant_words_drops_punctuation_as_its_own_word(self):
+        # "&" isn't alphanumeric, so re.findall never captures it as a
+        # word on its own -- this is what lets club-name matching survive
+        # an OCR-misread or noise-separated "&", see the next test.
+        # (Words come back through _fold's OCR digit/letter confusion
+        # mapping too, e.g. "algorithm" -> "a1g0r1thm" -- applied
+        # consistently on both sides of every comparison, so this looks
+        # odd here but doesn't break matching.)
+        self.assertEqual(parse_sheet_screenshots._significant_words("Algorithm & Blues"),
+                          ["a1g0r1thm", "b1ues"])
+
+    def test_find_fixture_matches_despite_noise_between_club_name_words(self):
+        # Confirmed live against a REAL capture: "Algorithm" and "Blues"
+        # were both read correctly by OCR, but a stray garbled token
+        # (leftover score-cell noise) sat between them in the
+        # reconstructed row text, so the OLD exact-substring check for
+        # "algorithm & blues" as one unbroken phrase failed even though
+        # every real word was present nearby. Word-by-word matching
+        # (ignoring order/adjacency/punctuation) fixes this class of bug
+        # without needing to guess which specific character OCR mangled.
+        row_tokens = [
+            {"text": "M20", "left": 513, "top": 1664, "width": 30, "height": 20},
+            {"text": "The", "left": 606, "top": 1665, "width": 30, "height": 20},
+            {"text": "Galacticos", "left": 671, "top": 1665, "width": 80, "height": 20},
+            {"text": "[garbled]", "left": 1200, "top": 1665, "width": 40, "height": 20},
+            {"text": "Algorithm", "left": 1552, "top": 1665, "width": 80, "height": 20},
+            {"text": "&", "left": 1697, "top": 1665, "width": 10, "height": 20},
+            {"text": "Blues", "left": 1728, "top": 1665, "width": 50, "height": 20},
+        ]
+        row_text = " ".join(t["text"] for t in sorted(row_tokens, key=lambda t: t["left"]))
+        folded_row = parse_sheet_screenshots._fold(row_text)
+        known_clubs = ["The Galacticos", "Algorithm & Blues"]
+        present = [c for c in known_clubs
+                   if parse_sheet_screenshots._significant_words(c)
+                   and all(w in folded_row for w in parse_sheet_screenshots._significant_words(c))]
+        self.assertEqual(sorted(present), ["Algorithm & Blues", "The Galacticos"])
+
 
 class VarianceScaleTests(unittest.TestCase):
     """variance_scale was added to test one specific diagnosis for the

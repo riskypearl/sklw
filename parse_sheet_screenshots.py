@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import re
 import sys
 import unicodedata
 from pathlib import Path
@@ -259,6 +260,19 @@ def fuzzy_match_one(text: str, candidates: dict[str, int]) -> str | None:
     return by_fold[close[0]] if close else None
 
 
+def _significant_words(name: str) -> list[str]:
+    """Folded alphanumeric words (2+ chars) of a club name, punctuation
+    dropped entirely -- e.g. "Algorithm & Blues" -> ["algorithm",
+    "blues"], the lone "&" simply isn't alphanumeric so never becomes
+    its own word. Matching word-by-word instead of requiring the whole
+    punctuated name as one exact contiguous substring is deliberately
+    more forgiving of OCR misreading a single connector character like
+    "&" (a known weak spot -- ampersands are visually complex) without
+    needing to guess which specific punctuation marks might get
+    misread."""
+    return [_fold(w) for w in re.findall(r"[A-Za-z0-9]+", name) if len(w) >= 2]
+
+
 def find_fixture_from_live_scores(image_path: Path, our_club_substring: str,
                                    known_clubs: list[str]) -> tuple[str, str, str]:
     """OCRs the LiveScores screenshot, finds the row containing our
@@ -273,12 +287,16 @@ def find_fixture_from_live_scores(image_path: Path, our_club_substring: str,
     matches: list[tuple[str, str, str]] = []
     for row in rows:
         row_text = " ".join(t["text"] for t in sorted(row, key=lambda t: t["left"]))
+        folded_row = _fold(row_text)
         m_label_tok = next((t["text"] for t in row if t["text"].upper().startswith("M")
                              and t["text"][1:].isdigit()), None)
         if not m_label_tok:
             continue
-        # substring check per known club name against the row's full text
-        present = [c for c in known_clubs if _fold(c) in _fold(row_text)]
+        # every significant word of a known club name must appear
+        # SOMEWHERE in the row (order/punctuation-independent), not the
+        # whole name as one exact contiguous substring
+        present = [c for c in known_clubs
+                   if _significant_words(c) and all(w in folded_row for w in _significant_words(c))]
         matched_ours = [c for c in present if needle in _fold(c)]
         if matched_ours and len(present) >= 2:
             opponent = next((c for c in present if c not in matched_ours), None)
