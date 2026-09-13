@@ -1030,13 +1030,22 @@ a fix to the engine reaches this automatically instead of needing to be
 repeated by hand in a second copy. `league_wide_sim.py` imports
 `sklw_matchup.py` and `parse_sheet_screenshots.py` directly.
 
-For each fixture found in the `LiveScores` screenshot: reads both
-clubs' real GK/Strikers off that fixture's `M#` tab screenshot (same
-OCR + color approach as the single-matchup screenshot pipeline, same
-"genuinely less reliable than a real cell" caveat — doubled here, since
-a bad read on EITHER club silently skips that whole fixture rather than
-guessing), looks up both rosters in `clubs.json`, fetches all 32
-managers' real live FPL data, and runs the identical simulation
+For every `M#.png` actually captured: identifies which 2 clubs are in
+it by reading that tab's OWN banner text directly (`find_fixture_
+clubs_from_tab`), NOT by correlating through the `LiveScores` tab's
+OCR'd `M<N>` label — confirmed live that label can genuinely misread (a
+digit silently dropped), making two DIFFERENT real tabs appear to share
+one label, which would have silently pulled the WRONG tab's screenshot
+for whichever fixture got processed second. Tab filenames themselves
+are always reliable (`capture_sheet_screenshots.py` names them directly
+from the real tab name via the browser DOM, no OCR involved in
+capture), so this only needs to identify who's actually in each one.
+Then reads both clubs' real GK/Strikers off that same tab screenshot
+(same OCR + color approach as the single-matchup screenshot pipeline,
+same "genuinely less reliable than a real cell" caveat — doubled here,
+since a bad read on EITHER club silently skips that whole fixture
+rather than guessing), looks up both rosters in `clubs.json`, fetches
+all 32 managers' real live FPL data, and runs the identical simulation
 `sklw_matchup.py` runs for one matchup.
 
 **Scale warning**: league-wide means fetching live picks for every

@@ -51,6 +51,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import statistics
 import sys
 import time
@@ -150,19 +151,35 @@ def main():
         sys.exit(1)
 
     shots_dir = Path(args.screenshots_dir)
-    live_scores_path = shots_dir / "LiveScores.png"
-    if not live_scores_path.exists():
-        print(f"ERROR: no {live_scores_path} -- run capture_sheet_screenshots.py first.")
+    if not shots_dir.exists():
+        print(f"ERROR: no {shots_dir} -- run capture_sheet_screenshots.py first.")
         sys.exit(1)
     if not Path(args.clubs_file).exists():
         print(f"ERROR: no clubs.json at {args.clubs_file} -- run build_clubs_json.py first.")
         sys.exit(1)
     clubs = json.loads(Path(args.clubs_file).read_text())
 
-    print("Reading fixtures from LiveScores...")
-    fixtures = ps.find_all_fixtures(live_scores_path, list(clubs))
+    print("Identifying fixtures from each captured M# tab...")
+    # Reads who's actually IN each tab directly (its own banner text)
+    # rather than correlating via LiveScores' OCR'd "M<N>" label --
+    # confirmed live that label can misread (a digit silently dropped),
+    # making two DIFFERENT real tabs appear to share one label, which
+    # would have silently pulled the WRONG tab's screenshot for
+    # whichever fixture got processed second. Tab filenames themselves
+    # are always reliable (capture_sheet_screenshots.py names them
+    # directly from the real tab name via the browser DOM, no OCR
+    # involved in capture), so this just needs to identify who's in
+    # each one -- see find_fixture_clubs_from_tab.
+    tab_paths = sorted(p for p in shots_dir.glob("M*.png") if re.fullmatch(r"M\d+\.png", p.name))
+    fixtures: list[tuple[str, str, str]] = []
+    for tab_path in tab_paths:
+        found = ps.find_fixture_clubs_from_tab(tab_path, list(clubs))
+        if found is None:
+            print(f"  {tab_path.stem}: couldn't cleanly identify exactly 2 clubs, skipping.")
+            continue
+        fixtures.append((tab_path.stem, found[0], found[1]))
     if not fixtures:
-        print("ERROR: found no recognizable fixtures in the LiveScores screenshot.")
+        print(f"ERROR: found no recognizable fixtures among the M# tabs in {shots_dir}.")
         sys.exit(1)
     print(f"Found {len(fixtures)} fixture(s).")
 

@@ -1165,6 +1165,37 @@ class ParseSheetScreenshotsTests(unittest.TestCase):
             y += 40
         img.save(path)
 
+    def test_find_fixture_clubs_from_tab_reads_banner_not_m_label(self):
+        # Confirmed live: LiveScores' own OCR'd "M<N>" label can
+        # misread (a digit silently dropped), making two DIFFERENT real
+        # tabs appear to share one label -- a serious bug for league-
+        # wide use, since the second fixture processed would silently
+        # pull the WRONG tab's screenshot. find_fixture_clubs_from_tab
+        # sidesteps this entirely by reading who's actually IN a given
+        # tab (its own banner text) rather than correlating via a label.
+        with tempfile.TemporaryDirectory() as d:
+            img_path = Path(d) / "M1.png"
+            img = Image.new("RGB", (700, 200), "white")
+            draw = ImageDraw.Draw(img)
+            font = self._font(24)
+            draw.text((20, 20), "Netflix & Chilwell", fill="black", font=font)
+            draw.text((20, 140), "El Sin Nombre", fill="black", font=font)
+            img.save(img_path)
+            known_clubs = ["Netflix & Chilwell", "El Sin Nombre", "The Galacticos", "Algorithm & Blues"]
+            result = parse_sheet_screenshots.find_fixture_clubs_from_tab(img_path, known_clubs)
+        self.assertEqual(set(result), {"Netflix & Chilwell", "El Sin Nombre"})
+
+    def test_find_fixture_clubs_from_tab_refuses_unless_exactly_two(self):
+        with tempfile.TemporaryDirectory() as d:
+            img_path = Path(d) / "M1.png"
+            img = Image.new("RGB", (700, 100), "white")
+            draw = ImageDraw.Draw(img)
+            draw.text((20, 20), "Netflix & Chilwell", fill="black", font=self._font(24))
+            img.save(img_path)
+            known_clubs = ["Netflix & Chilwell", "El Sin Nombre"]
+            result = parse_sheet_screenshots.find_fixture_clubs_from_tab(img_path, known_clubs)
+        self.assertIsNone(result)
+
     def test_find_all_fixtures_returns_every_row(self):
         with tempfile.TemporaryDirectory() as d:
             img_path = Path(d) / "LiveScores.png"

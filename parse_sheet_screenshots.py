@@ -337,6 +337,35 @@ def find_fixture_from_live_scores(image_path: Path, our_club_substring: str,
     return matches[0]
 
 
+def find_fixture_clubs_from_tab(image_path: Path, known_clubs: list[str]) -> tuple[str, str] | None:
+    """Determines which 2 clubs are in an M# tab screenshot by OCR'ing
+    the WHOLE image and checking which known club names' significant
+    words are present anywhere in it -- each club's full name (in its
+    own banner row, top or bottom) only appears once per tab, so this
+    doesn't need to isolate the banner specifically.
+
+    Exists as a more robust alternative to correlating a tab to its
+    fixture via LiveScores' own OCR'd "M<N>" label: confirmed live that
+    label can genuinely misread (e.g. a digit silently dropped), which
+    would make two DIFFERENT real tabs appear to share the same label
+    -- a serious bug for league-wide use, since whichever fixture is
+    processed second would silently pull the WRONG tab's screenshot.
+    Since capture_sheet_screenshots.py already names each screenshot
+    file directly from the real tab name (read via the browser DOM, no
+    OCR involved in capture itself), an M#.png file is always reliably
+    the right tab -- this only needs to identify WHO'S in it, sidestepping
+    the unreliable label-matching problem entirely for callers (like
+    league_wide_sim.py) that are already going to OCR every tab anyway.
+    Returns None (not a guess) unless exactly 2 clubs are found."""
+    tokens = ocr_tokens(image_path)
+    folded = _fold(" ".join(t["text"] for t in tokens))
+    present = [c for c in known_clubs
+               if _significant_words(c) and all(w in folded for w in _significant_words(c))]
+    if len(present) != 2:
+        return None
+    return present[0], present[1]
+
+
 def _match_tokens_to_roster(tokens: list[dict], roster: dict[str, int],
                              matched: dict[str, dict] | None = None) -> dict[str, dict]:
     """Shared matching step: tries each token (and 2-token spans, for a
