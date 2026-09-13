@@ -146,6 +146,18 @@ def main():
                   "for it if it's not in Recent).")
             input("Once you can actually see the document open (tabs, cells "
                   "visible), press Enter here...")
+            # Confirmed live: reading the tab bar immediately after Enter
+            # can race an in-progress page navigation from the click into
+            # the document (however many seconds ago that was -- Google
+            # Sheets can still be settling), destroying the JS execution
+            # context mid-read. Wait for the page to actually finish
+            # loading first, same fix as fetch_sheet_workbook.py's
+            # earlier networkidle/timing issue.
+            try:
+                page.wait_for_load_state("load", timeout=15_000)
+            except Exception:
+                pass
+            page.wait_for_timeout(2_000)
 
             tabs = discover_tabs(page)
             if not tabs:
