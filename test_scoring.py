@@ -1000,6 +1000,46 @@ class ParseSheetScreenshotsTests(unittest.TestCase):
         self.assertNotIn("gk", result)
         self.assertIn("warning", result)
 
+    def _build_m1_image_tiny_top(self, path, tiny_names: set[str]):
+        """Like _build_m1_image, but renders `tiny_names` in a much
+        smaller font -- simulates the real problem found live (a
+        visually taller/merged GK row with harder-to-read text there)
+        without depending on OCR failing in some specific unreliable
+        way. Tests that the actual RECOVERY mechanism (crop + upscale +
+        re-OCR the top region) works, not just that a fully-absent name
+        stays missing."""
+        BLUE, GREEN, GRAY, WHITE = (173, 216, 230), (198, 224, 180), (217, 217, 217), (255, 255, 255)
+        img = Image.new("RGB", (700, 900), "white")
+        d = ImageDraw.Draw(img)
+        font = self._font(20)
+        tiny_font = self._font(7)
+        names = (["@LewisW_FF", "@fpl_flair", "@Ad_1net"] + [f"@LSquad{i}" for i in range(11)]
+                 + ["@LBench1", "@LBench2"])
+        fills = [BLUE, BLUE, WHITE] + [GREEN] * 11 + [GRAY, GRAY]
+        row_h = 40
+        for i, (name, fill) in enumerate(zip(names, fills)):
+            y = 20 + i * row_h
+            d.rectangle([10, y, 400, y + row_h - 4], fill=fill)
+            d.text((20, y + 8), name, fill="black", font=tiny_font if name in tiny_names else font)
+        img.save(path)
+
+    def test_second_pass_recovers_hard_to_read_top_region_text(self):
+        with tempfile.TemporaryDirectory() as d:
+            img_path = Path(d) / "M1.png"
+            self._build_m1_image_tiny_top(img_path, tiny_names={"@Ad_1net"})
+            roster = {"@LewisW_FF": 10, "@fpl_flair": 11, "@Ad_1net": 12,
+                      **{f"@LSquad{i}": 2000 + i for i in range(11)},
+                      "@LBench1": 13, "@LBench2": 14}
+            entries_without_recovery = parse_sheet_screenshots._match_tokens_to_roster(
+                parse_sheet_screenshots.ocr_tokens(img_path), roster)
+            result = parse_sheet_screenshots.parse_matchup_tab(img_path, roster, {})
+        # Confirms the scenario actually exercises recovery (tiny text
+        # really does get missed by the normal pass) rather than
+        # trivially passing because nothing was ever hard to read.
+        self.assertNotIn("@Ad_1net", entries_without_recovery)
+        self.assertEqual(result.get("gk"), "@Ad_1net")
+        self.assertEqual(sorted(result.get("strikers", [])), ["@LewisW_FF", "@fpl_flair"])
+
     def test_squad_miss_still_succeeds_via_gap_consistency(self):
         """Requiring a literal 16/16 match made the feature nearly
         unusable against a real, denser capture (confirmed live -- a

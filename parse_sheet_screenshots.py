@@ -315,18 +315,35 @@ def find_fixture_from_live_scores(image_path: Path, our_club_substring: str,
     return matches[0]
 
 
-def resolve_handles_in_tab(image_path: Path, roster: dict[str, int]) -> list[dict]:
-    """OCRs the M# tab screenshot and matches tokens against ONE club's
-    known handle list (roster's keys) -- called once per side. Returns
-    [{"handle", "left", "top", "width", "height"}, ...] for every
-    cleanly-matched handle, sorted top to bottom. Handles OCR splitting
-    a single handle across adjacent tokens (rare but possible) by also
-    trying 2-token spans."""
-    tokens = ocr_tokens(image_path)
-    matched: dict[str, dict] = {}
+def _match_tokens_to_roster(tokens: list[dict], roster: dict[str, int],
+                             matched: dict[str, dict] | None = None) -> dict[str, dict]:
+    """Shared matching step: tries each token (and 2-token spans, for a
+    handle OCR split across adjacent tokens) against `roster`'s known
+    handles. Mutates and returns `matched` (a fresh dict if not given)
+    so callers can accumulate matches across multiple OCR passes over
+    different image regions.
+
+    A 2-token span is only tried when both tokens are on roughly the
+    same line (close "top") -- confirmed live as a real bug otherwise:
+    `tokens` isn't guaranteed to be in reading-order top to bottom (it
+    can be a merge of several OCR passes), so two entirely unrelated
+    tokens from DIFFERENT rows sitting next to each other in the list
+    could get concatenated into a chunk that coincidentally fuzzy-
+    matches some roster handle -- and since a match is recorded using
+    chunk_toks[0]'s position, that's the WRONG token's position,
+    silently attributing the match to the wrong row. Caught this live:
+    a stray "ee" token immediately followed by the real (correctly
+    read) handle in the list, concatenated into a string that still
+    fuzzy-matched, blocked the correct standalone match from ever being
+    tried since a hit was already recorded."""
+    if matched is None:
+        matched = {}
     for i, tok in enumerate(tokens):
         for span in (1, 2):
             chunk_toks = tokens[i:i + span]
+            if span == 2:
+                if len(chunk_toks) < 2 or abs(chunk_toks[0]["top"] - chunk_toks[1]["top"]) > 8:
+                    continue
             chunk = "".join(t["text"] for t in chunk_toks)
             hit = fuzzy_match_one(chunk, roster)
             if hit and hit not in matched:
@@ -334,6 +351,67 @@ def resolve_handles_in_tab(image_path: Path, roster: dict[str, int]) -> list[dic
                                  "top": chunk_toks[0]["top"], "width": sum(t["width"] for t in chunk_toks),
                                  "height": chunk_toks[0]["height"]}
                 break
+    return matched
+
+
+def _second_pass_top_region(image_path: Path, matched: dict[str, dict], upscale: int = 3) -> list[dict]:
+    """If the GK+Strikers region is under-matched, crops a generous
+    vertical band around it, upscales it heavily, and re-OCRs just that
+    band with the full PSM sweep. Confirmed live: a real capture had a
+    visually TALLER, merged GK row (to align with denser content on the
+    opposing side) that Tesseract seemingly missed entirely, while the
+    more uniform Squad rows below read fine at normal resolution --
+    a focused crop-and-upscale on just the small, oddly-spaced top
+    region should help without repeating the earlier mistake of
+    blindly upscaling the WHOLE image (which hurt more than it helped
+    for the bulk of normal-sized content, see _prep_image).
+
+    Band bounds: from the topmost matched entry so far minus a margin
+    (covers a row that was missed ABOVE everything currently found) to
+    the 4th-topmost matched entry (very likely a real Squad member,
+    since Squad is large/reliably read) plus a small margin. Falls back
+    to the image's own top ~300px if fewer than 4 entries are matched
+    yet, so this still does something useful even on a rough first
+    pass."""
+    from PIL import Image
+
+    img = Image.open(image_path)
+    tops = sorted(m["top"] for m in matched.values())
+    if len(tops) >= 4:
+        top = max(0, tops[0] - 100)
+        bottom = min(img.height, tops[3] + 40)
+    else:
+        top = 0
+        bottom = min(img.height, 300)
+    if bottom <= top:
+        return []
+
+    crop = img.crop((0, top, img.width, bottom))
+    crop = crop.resize((crop.width * upscale, crop.height * upscale))
+    tokens: list[dict] = []
+    for psm in _PSM_MODES:
+        raw = _ocr_pass(crop, scale=upscale, psm=psm)
+        for t in raw:
+            t["top"] += top  # back to the ORIGINAL image's coordinates
+        tokens.extend(raw)
+    return _dedupe_tokens(tokens)
+
+
+def resolve_handles_in_tab(image_path: Path, roster: dict[str, int]) -> list[dict]:
+    """OCRs the M# tab screenshot and matches tokens against ONE club's
+    known handle list (roster's keys) -- called once per side. Returns
+    [{"handle", "left", "top", "width", "height"}, ...] for every
+    cleanly-matched handle, sorted top to bottom. If anything's missing
+    after the normal full-image pass, also tries a focused, heavily
+    upscaled second pass over just the estimated GK+Strikers region
+    (see _second_pass_top_region) before giving up on those -- a full-
+    image OCR pass that works fine for the uniform Squad rows can still
+    miss oddly-sized/spaced text near the top."""
+    tokens = ocr_tokens(image_path)
+    matched = _match_tokens_to_roster(tokens, roster)
+    if len(matched) < len(roster):
+        extra_tokens = _second_pass_top_region(image_path, matched)
+        _match_tokens_to_roster(extra_tokens, roster, matched)
     return sorted(matched.values(), key=lambda m: m["top"])
 
 

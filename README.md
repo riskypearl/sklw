@@ -687,12 +687,46 @@ just a synthetic render), which caught two more real issues:
   definition, so it can't overshoot into the next row regardless of
   height.
 
-Both were found and fixed using the same real screenshot, so this has
-now been validated end-to-end against actual sheet content, not just a
-synthetic test render — though "expect occasional partial-match
-refusals" (a single OCR-missed handle, usually a borderline
-digit/letter misread that doesn't clear the fuzzy cutoff) is still the
-deliberately safe failure mode, not a bug to chase away blindly.
+Several more real issues turned up chasing this against actual `M#` tab
+captures (which have a richer layout than a synthetic test anticipated
+— extra columns of real player names alongside handles, a visually
+TALLER/merged GK row to align with denser content on the opposing
+side):
+- Club names were matched as one exact contiguous phrase (e.g.
+  "algorithm & blues"), which failed even when every real word was
+  correctly read nearby — a stray garbled token between them (leftover
+  score-cell noise) broke the adjacency. Fixed by requiring each
+  significant word to appear anywhere in the row instead, ignoring
+  order/punctuation.
+- Requiring a literal 16/16 handle match per club turned out to make
+  the feature nearly unusable against real content (consistently
+  13-15/16). Replaced with a check for the actual failure mode instead
+  of raw count: the vertical gaps between the top-3 GK+Strikers
+  candidates are compared against the median row spacing for that
+  club — a silently skipped row shows up as roughly double the normal
+  gap. A miss elsewhere with consistent top-3 spacing now proceeds
+  (flagged for a spot-check); an inconsistent top-3 still refuses.
+- The GK row's harder-to-read text (small/oddly-spaced due to the
+  taller merged row) was often missed by the normal full-image OCR
+  pass even though the more uniform Squad rows below read fine. Added
+  a second, targeted pass: crop just the estimated GK+Strikers region,
+  upscale it heavily, and re-OCR — a focused fix, not a repeat of the
+  earlier mistake of upscaling the WHOLE image (which measurably hurt
+  more than it helped for normal-sized content).
+- That fix exposed a genuine pre-existing bug: matching a handle split
+  across 2 adjacent OCR tokens didn't check the two tokens were
+  actually on the same row before concatenating them — two unrelated
+  tokens from different rows, sitting next to each other purely due to
+  list order, could concatenate into a string that coincidentally
+  fuzzy-matched a real handle, recording the match at the WRONG row's
+  position. Fixed by only trying a 2-token span when both tokens are
+  within a few pixels vertically.
+
+All fixed using real capture data (a real fixture, ground-truth-checked
+against the actual sheet), not just synthetic test renders — though
+"expect occasional partial-match refusals" is still the deliberately
+safe failure mode when something genuinely can't be determined
+cleanly, not a bug to chase away blindly.
 
 Picks up the SAME `overrides.json` `sklw_lineup.py` writes to — any
 `--wildcard`/`--transfer`/`--tc`/`--set-score` already recorded there
