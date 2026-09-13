@@ -647,9 +647,18 @@ building this, which caught two genuine issues, both fixed:
   matched entries" as the GK+Strikers block silently promoted a Squad
   member into the GK slot — and the color check still found an
   accidental 2-1 split among the WRONG 3 people, reporting a confident-
-  looking but wrong GK. Fixed by refusing outright unless ALL 16
-  handles for that club matched cleanly; a partial match prints a
-  warning and writes nothing rather than guessing.
+  looking but wrong GK. First fixed by refusing outright unless ALL 16
+  handles matched cleanly — but a real capture (denser/wider than a
+  synthetic test anticipated: extra columns of actual player names
+  alongside handles) realistically may never hit a clean 16/16, which
+  would make the feature nearly unusable. Refined to check for the
+  actual failure mode directly instead: the vertical gaps between the
+  top-3 candidates are compared against the MEDIAN row spacing across
+  every matched handle for that club — a silently skipped row would
+  show up as roughly double the normal gap. A miss elsewhere (Squad/
+  Bench) with consistent top-3 spacing now proceeds (with a "still
+  worth a spot-check" note); inconsistent spacing, or fewer than 3
+  matched at all, still refuses outright.
 - Also normalizes classic OCR digit/letter mixups (`1`/`l`/`i`, `0`/`O`)
   before comparing, confirmed live as a real, repeated failure mode on
   rendered handle text.

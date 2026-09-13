@@ -46,6 +46,7 @@ import argparse
 import difflib
 import json
 import re
+import statistics
 import sys
 import unicodedata
 from pathlib import Path
@@ -358,6 +359,30 @@ def classify_gk_strikers(image_path: Path, top_entries: list[dict]) -> tuple[str
     return None
 
 
+def _top3_gaps_consistent(entries: list[dict], tolerance: float = 1.5) -> bool:
+    """Checks that the vertical gaps between entries[0]-entries[1] and
+    entries[1]-entries[2] both look like a single real row's worth of
+    spacing, using the MEDIAN gap across ALL matched entries as the
+    reference row height. If a row were silently skipped somewhere
+    within the top 3 (the actual failure mode a full-match requirement
+    guards against -- see parse_matchup_tab), that specific gap would be
+    roughly double a normal row's spacing, which this catches directly.
+    Needs at least 4 entries to compute a reliable median (a couple of
+    misses elsewhere in the Squad/Bench are fine and expected on a real
+    capture; what matters is THIS specific 3-person block having no gap
+    in it)."""
+    if len(entries) < 4:
+        return False
+    tops = sorted(e["top"] for e in entries)
+    gaps = [tops[i + 1] - tops[i] for i in range(len(tops) - 1)]
+    median_gap = statistics.median(gaps)
+    if median_gap <= 0:
+        return False
+    top3 = sorted(entries[:3], key=lambda e: e["top"])
+    top3_gaps = [top3[1]["top"] - top3[0]["top"], top3[2]["top"] - top3[1]["top"]]
+    return all(g <= median_gap * tolerance for g in top3_gaps)
+
+
 def parse_matchup_tab(image_path: Path, us_roster: dict[str, int], them_roster: dict[str, int]
                        ) -> dict:
     """Full extraction for one club's side of an M# tab screenshot:
@@ -367,29 +392,45 @@ def parse_matchup_tab(image_path: Path, us_roster: dict[str, int], them_roster: 
     real signal the capture/OCR didn't get everything) and 'warning' if
     anything couldn't be determined cleanly.
 
-    Requires a FULL 16/16 match before attempting GK/Strikers at all --
-    confirmed live this matters: with even one handle missed by OCR
-    (e.g. the real GK), "topmost 3 matched entries" silently shifts to
-    include a Squad member instead, and the color check can still find
-    an accidental 2-1 split among the WRONG 3 people, reporting a
-    confident-looking but wrong GK. Refusing outright on a partial match
-    is the safe failure mode -- better to say "check it yourself" than
-    to silently write a wrong role into matchup_pins.json."""
+    The actual risk a partial match poses: with a handle missed by OCR
+    (e.g. the real GK), "topmost 3 matched entries" can silently shift
+    to include a Squad member instead, and the color check can still
+    find an accidental 2-1 split among the WRONG 3 people, reporting a
+    confident-looking but wrong GK -- confirmed live this really
+    happens. An earlier version refused on ANY partial match to guard
+    against this, but real captures (denser/wider than a synthetic test
+    anticipated -- extra columns, more content) may realistically never
+    hit a clean 16/16, which would make this feature nearly unusable.
+    Instead, directly checks for the actual failure mode: if the gaps
+    between the top-3 candidates look like consistent single-row
+    spacing (see _top3_gaps_consistent), a miss further down in
+    Squad/Bench doesn't matter and this proceeds; only refuses when
+    that specific check fails, or fewer than 3 were matched at all."""
     entries = resolve_handles_in_tab(image_path, us_roster)
     result: dict = {"matched_count": len(entries), "total_roster": len(us_roster)}
-    if len(entries) < len(us_roster):
+    if len(entries) < 3:
         result["warning"] = (f"only matched {len(entries)}/{len(us_roster)} handles -- "
-                              f"refusing to guess GK/Strikers from a partial/possibly "
-                              f"misaligned match. Missing OCR reads (even just one) can "
-                              f"silently shift which 3 people look like the top block.")
+                              f"not enough to even attempt GK/Strikers.")
+        return result
+    if len(entries) < len(us_roster) and not _top3_gaps_consistent(entries):
+        result["warning"] = (f"only matched {len(entries)}/{len(us_roster)} handles, and "
+                              f"the top-3 candidates' spacing doesn't look like consistent "
+                              f"single rows -- refusing to guess GK/Strikers, a row may have "
+                              f"been silently skipped. Candidates were: "
+                              f"{[e['handle'] for e in sorted(entries[:3], key=lambda e: e['top'])]}")
         return result
     gk_strikers = classify_gk_strikers(image_path, entries[:3])
     if gk_strikers is None:
-        result["warning"] = ("matched all 16 handles but couldn't split the top 3 into "
-                              "a clean 2-1 by color -- pixel-sampling may have landed on "
-                              f"the wrong spot. Candidates were: {[e['handle'] for e in entries[:3]]}")
+        result["warning"] = ("matched enough handles with consistent top-3 spacing but "
+                              "couldn't split them into a clean 2-1 by color -- pixel-"
+                              "sampling may have landed on the wrong spot. Candidates were: "
+                              f"{[e['handle'] for e in entries[:3]]}")
         return result
     result["gk"], result["strikers"] = gk_strikers
+    if len(entries) < len(us_roster):
+        result["warning"] = (f"only matched {len(entries)}/{len(us_roster)} handles, but the "
+                              f"top-3 GK/Strikers block had consistent spacing so this is "
+                              f"still trusted -- still worth a spot-check.")
     return result
 
 

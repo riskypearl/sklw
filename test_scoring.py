@@ -1000,6 +1000,36 @@ class ParseSheetScreenshotsTests(unittest.TestCase):
         self.assertNotIn("gk", result)
         self.assertIn("warning", result)
 
+    def test_squad_miss_still_succeeds_via_gap_consistency(self):
+        """Requiring a literal 16/16 match made the feature nearly
+        unusable against a real, denser capture (confirmed live -- a
+        real M# tab has extra columns/content a synthetic test didn't
+        anticipate, so a stray miss somewhere in Squad/Bench is
+        realistic). A miss OUTSIDE the top-3 GK+Strikers block should
+        still succeed, since the top-3 itself has consistent spacing --
+        the actual risk (a skipped row shifting the top-3) isn't
+        present here."""
+        with tempfile.TemporaryDirectory() as d:
+            img_path = Path(d) / "M1.png"
+            self._build_m1_image(img_path, drop_names={"@LSquad5"})
+            roster = {"@LewisW_FF": 10, "@fpl_flair": 11, "@Ad_1net": 12,
+                      **{f"@LSquad{i}": 2000 + i for i in range(11)},
+                      "@LBench1": 13, "@LBench2": 14}
+            result = parse_sheet_screenshots.parse_matchup_tab(img_path, roster, {})
+        self.assertEqual(result["matched_count"], 15)
+        self.assertEqual(result["gk"], "@Ad_1net")
+        self.assertEqual(sorted(result["strikers"]), ["@LewisW_FF", "@fpl_flair"])
+        self.assertIn("warning", result)  # still flagged for a spot-check, just not blocked
+
+    def test_top3_gaps_consistent_detects_a_skipped_row(self):
+        # 3 real rows evenly spaced (gap 40 each) plus a 4th establishing
+        # the median -- then a variant where the top-3 has a doubled gap
+        # (as if a row between entries 1 and 2 was silently skipped).
+        even = [{"top": 100}, {"top": 140}, {"top": 180}, {"top": 220}]
+        self.assertTrue(parse_sheet_screenshots._top3_gaps_consistent(even))
+        skipped = [{"top": 100}, {"top": 140}, {"top": 220}, {"top": 260}]
+        self.assertFalse(parse_sheet_screenshots._top3_gaps_consistent(skipped))
+
     def test_fold_normalizes_single_char_ocr_confusion(self):
         # Confirmed live: Tesseract really does misread "0" as "O" on
         # real rendered handle text -- a same-length substitution, so
