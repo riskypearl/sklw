@@ -131,6 +131,24 @@ def main():
                           "a basic rate-limit safety margin (default: 0.3)")
     args = ap.parse_args()
 
+    try:
+        import pytesseract
+        from PIL import Image  # noqa: F401
+    except ImportError:
+        print("ERROR: pytesseract/pillow aren't installed -- run: pip install pytesseract pillow "
+              "(and install the Tesseract OCR binary itself, see parse_sheet_screenshots.py's "
+              "module docstring)")
+        sys.exit(1)
+    ps._setup_tesseract()
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception:
+        print("ERROR: the Tesseract OCR binary itself isn't installed (or not on PATH, "
+              "and not in the usual Windows install location either) -- this is separate "
+              "from the pytesseract pip package. Install it: "
+              "https://github.com/UB-Mannheim/tesseract/wiki")
+        sys.exit(1)
+
     shots_dir = Path(args.screenshots_dir)
     live_scores_path = shots_dir / "LiveScores.png"
     if not live_scores_path.exists():

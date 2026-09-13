@@ -187,9 +187,19 @@ def ocr_tokens(image_path: Path, min_tokens: int = 5) -> list[dict]:
     no need for the grayscale+upscale prep in the normal case). Only
     falls back to also trying _prep_image's upscale (on top of the same
     PSM sweep) if the raw passes together suspiciously find fewer than
-    `min_tokens` -- e.g. a genuinely low-resolution capture."""
+    `min_tokens` -- e.g. a genuinely low-resolution capture.
+
+    Calls _setup_tesseract() itself rather than relying on every caller
+    to remember to -- confirmed live this is a real, repeatable bug
+    otherwise: both this module's own main() AND league_wide_sim.py
+    (a separate script that also calls into this OCR pipeline) each
+    independently hit a raw TesseractNotFoundError traceback from
+    forgetting the setup step. Doing it here, in the one true entry
+    point every OCR call goes through, fixes it for every caller at
+    once, present and future."""
     from PIL import Image
 
+    _setup_tesseract()
     original = Image.open(image_path)
     tokens: list[dict] = []
     for psm in _PSM_MODES:
