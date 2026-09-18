@@ -98,11 +98,23 @@ def get_manager_picks(manager_id: int, gw: int) -> dict | None:
 
 
 def fetch_picks_with_fallback(mid: int, last_finished_gw: int, next_gw: int) -> tuple[dict | None, int | None]:
+    """A Free Hit squad is a one-GW rental -- it automatically reverts to
+    the manager's real squad the next GW, so a completed GW whose
+    active_chip is 'freehit' is useless as a stand-in for what they'll
+    field next. Walk further back until a non-free-hit squad turns up."""
     picks_data = get_manager_picks(mid, next_gw)
     gw_used = next_gw
     if picks_data is None and last_finished_gw > 0:
-        picks_data = get_manager_picks(mid, last_finished_gw)
-        gw_used = last_finished_gw
+        gw = last_finished_gw
+        while gw > 0:
+            candidate = get_manager_picks(mid, gw)
+            if candidate is None:
+                break
+            if candidate.get("active_chip") == "freehit":
+                gw -= 1
+                continue
+            picks_data, gw_used = candidate, gw
+            break
     return picks_data, gw_used
 
 

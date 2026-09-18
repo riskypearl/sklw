@@ -962,7 +962,15 @@ def fetch_picks_with_fallback(mid: int, mode: str, last_finished_gw: int,
                                next_gw: int) -> tuple[dict | None, int | None]:
     """Shared fallback chain used by both the main scoring loop and
     --explain, so they can never drift apart on which GW's picks get used.
-    Returns (picks_data, gw_used); picks_data is None if nothing worked."""
+    Returns (picks_data, gw_used); picks_data is None if nothing worked.
+
+    A Free Hit squad is a one-GW rental -- FPL automatically reverts the
+    manager to their real squad the very next GW, so a completed GW whose
+    active_chip is 'freehit' is USELESS as a proxy for what they'll field
+    next (it won't exist anymore). When the last-finished-GW squad we'd
+    otherwise fall back to is a free hit, walk further back until we find
+    an actual (non-free-hit) squad -- that's the one that really carries
+    forward."""
     picks_data = None
     gw_used = None
     if mode == "final":
@@ -972,8 +980,18 @@ def fetch_picks_with_fallback(mid: int, mode: str, last_finished_gw: int,
             print(f"  GW{next_gw} picks not public yet (deadline hasn't "
                   f"passed) -- falling back to GW{last_finished_gw}")
     if picks_data is None and last_finished_gw > 0:
-        picks_data = get_manager_picks(mid, last_finished_gw)
-        gw_used = last_finished_gw
+        gw = last_finished_gw
+        while gw > 0:
+            candidate = get_manager_picks(mid, gw)
+            if candidate is None:
+                break
+            if candidate.get("active_chip") == "freehit":
+                print(f"  GW{gw} squad was a Free Hit (reverts automatically) -- "
+                      f"falling back further to find the real squad")
+                gw -= 1
+                continue
+            picks_data, gw_used = candidate, gw
+            break
     if picks_data is None and mode == "preview":
         picks_data = get_manager_picks(mid, next_gw)
         gw_used = next_gw
