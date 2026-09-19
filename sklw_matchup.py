@@ -1072,6 +1072,23 @@ def gk_strikers_pending_tally(club: dict[str, dict], roles: dict[str, list[str]]
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
+def net_pending_tally(us_tally: list[tuple[str, int]], them_tally: list[tuple[str, int]]
+                       ) -> list[tuple[str, int]]:
+    """Per-player NET pending exposure between the two sides -- e.g. both
+    sides having 3 Haalands still to play cancels out to 0 and isn't
+    shown, since it can't actually swing the H2H result either way; only
+    an imbalance (one side owns/starts him more than the other) is a
+    real differentiator. Positive = us has more pending exposure to that
+    player than them, negative = the reverse. Sorted by the size of the
+    imbalance, largest first."""
+    us_counts = dict(us_tally)
+    them_counts = dict(them_tally)
+    net = [(n, us_counts.get(n, 0) - them_counts.get(n, 0))
+           for n in set(us_counts) | set(them_counts)]
+    net = [(n, c) for n, c in net if c != 0]
+    return sorted(net, key=lambda nc: (-abs(nc[1]), nc[0]))
+
+
 def print_roles(label: str, club: dict[str, dict], roles: dict[str, list[str]]) -> None:
     print(f"\n{label} suggested roles (by projection):")
     print(f"  GK:       {roles['gk'][0]} ({club[roles['gk'][0]]['projected']:.1f})")
@@ -1373,6 +1390,10 @@ def main():
               "the Strikers-vs-GK H2H):")
         print(f"  Us:   {_fmt(us_gk_strikers_pending)}")
         print(f"  Them: {_fmt(them_gk_strikers_pending)}")
+        net = net_pending_tally(us_gk_strikers_pending, them_gk_strikers_pending)
+        net_str = (", ".join(f"{n} {c:+d}" for n, c in net)
+                   if net else "fully cancels out -- identical pending exposure")
+        print(f"  Net (shared players like both sides' Haalands cancel out): {net_str}")
 
     rng = random.Random(args.seed)
     print(f"\nRunning {args.sims} simulated matchweeks...")
