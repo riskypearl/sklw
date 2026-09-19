@@ -1391,9 +1391,14 @@ def main():
         print(f"  Us:   {_fmt(us_gk_strikers_pending)}")
         print(f"  Them: {_fmt(them_gk_strikers_pending)}")
         net = net_pending_tally(us_gk_strikers_pending, them_gk_strikers_pending)
-        net_str = (", ".join(f"{n} {c:+d}" for n, c in net)
-                   if net else "fully cancels out -- identical pending exposure")
-        print(f"  Net (shared players like both sides' Haalands cancel out): {net_str}")
+        us_extra = [(n, c) for n, c in net if c > 0]
+        them_extra = [(n, -c) for n, c in net if c < 0]
+        print("  Net (shared players like both sides' Haalands cancel out):")
+        if not net:
+            print("    Fully cancels out -- identical pending exposure")
+        else:
+            print(f"    We have extra: {_fmt(us_extra) if us_extra else 'none'}")
+            print(f"    They have extra: {_fmt(them_extra) if them_extra else 'none'}")
 
     rng = random.Random(args.seed)
     print(f"\nRunning {args.sims} simulated matchweeks...")
