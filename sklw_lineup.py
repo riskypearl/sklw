@@ -1019,7 +1019,8 @@ def explain_manager(picks_data: dict, gw_used: int, players: dict[int, dict],
 
 def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = None,
                     ceiling: dict[str, float] | None = None, k: float = 0.5,
-                    never_bench: set[str] | None = None) -> None:
+                    never_bench: set[str] | None = None,
+                    force_strikers: set[str] | None = None) -> None:
     """scores: [(manager_name, projected_score), ...]. Prints a suggested
     SKLW role assignment -- top scorer to GK, next 2 to Strikers, rest
     fill the 11-a-side squad, bottom 2 benched.
@@ -1075,14 +1076,30 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
     protected name not found among the 16 scores is warned about and
     ignored, not an error -- this is meant for a one-off human
     preference override, not a strict guarantee that should crash a run
-    over a typo."""
+    over a typo.
+
+    force_strikers: up to 2 manager names locked straight into the
+    Striker slots, bypassing ceiling-weighted ranking entirely -- for
+    testing a specific what-if by hand (e.g. "what if these two specific
+    captains were my Strikers") rather than trusting the ranking's own
+    pick. GK is still chosen normally (ceiling-ranked) from whoever's
+    left. A real Free Hit forcing (fh_names) takes priority, since
+    that's an actual in-game chip rather than a hypothetical -- only
+    whatever Striker slots FH doesn't already claim get filled from
+    force_strikers. A name not found among the 16 scores is warned
+    about and ignored, same as never_bench."""
     fh_names = fh_names or set()
     ceiling = ceiling or {}
     never_bench = never_bench or set()
+    force_strikers = force_strikers or set()
     ranked = sorted(scores, key=lambda x: -x[1])
     if len(ranked) < 15:
         print(f"WARNING: only {len(ranked)} managers with data (need 15) -- "
               f"suggestion below is incomplete.")
+    missing_forced = force_strikers - {n for n, _ in ranked}
+    for name in missing_forced:
+        print(f"WARNING: --force-strikers name not found among this week's "
+              f"16 scores, ignored: {name}")
 
     def by_ceiling(pool: list[tuple[str, float]]) -> list[tuple[str, float]]:
         return sorted(pool, key=lambda ns: -(ns[1] + k * ceiling.get(ns[0], 0.0)))
@@ -1108,10 +1125,25 @@ def suggest_lineup(scores: list[tuple[str, float]], fh_names: set[str] | None = 
         pool = [ns for ns in ranked if ns[0] not in assigned]
         remaining_striker_slots = 2 - len(fh_strikers)
         gk = fh_gk
-        extra_strikers = by_ceiling(pool)[0:remaining_striker_slots]
+        forced_in_pool = [ns for ns in pool if ns[0] in force_strikers][0:remaining_striker_slots]
+        for n, _ in forced_in_pool:
+            print(f"NOTE: {n} locked into a Striker slot (--force-strikers).")
+        extra_strikers = forced_in_pool or by_ceiling(pool)[0:remaining_striker_slots]
         strikers = fh_strikers + extra_strikers
         assigned_extra = {n for n, _ in extra_strikers}
         remaining = [ns for ns in pool if ns[0] not in assigned_extra]  # still plain-score ordered
+        squad = remaining[0:11]
+        bench = remaining[11:13]
+    elif force_strikers:
+        forced_pool = [ns for ns in ranked if ns[0] in force_strikers][0:2]
+        for n, _ in forced_pool:
+            print(f"NOTE: {n} locked into a Striker slot (--force-strikers).")
+        strikers = forced_pool
+        assigned_strikers = {n for n, _ in strikers}
+        gk_pool = [ns for ns in ranked if ns[0] not in assigned_strikers]
+        gk = by_ceiling(gk_pool)[0:1]
+        assigned = assigned_strikers | {n for n, _ in gk}
+        remaining = [ns for ns in ranked if ns[0] not in assigned]  # still plain-score ordered
         squad = remaining[0:11]
         bench = remaining[11:13]
     else:
@@ -1262,6 +1294,14 @@ def main():
                           "override, not an EV-maximizing suggestion -- "
                           "doesn't touch GK/Strikers. Repeat for multiple "
                           "managers.")
+    ap.add_argument("--force-strikers", action="append", metavar="MANAGER_NAME",
+                     help="lock this club member into a Striker slot "
+                          "regardless of ceiling-weighted ranking -- for "
+                          "testing a specific what-if (e.g. two particular "
+                          "captains as Strikers) by hand. Repeat exactly "
+                          "twice for both Striker slots; GK is still chosen "
+                          "normally (ceiling-ranked) from everyone else. "
+                          "Defers to a real --fh forcing if both are set.")
     ap.add_argument("--projections", metavar="CSV_PATH",
                      help="path to a Solio-style projections CSV "
                           "(Pos,ID,Name,BV,SV,Team,1_xMins...,1_Pts...) to "
@@ -1440,6 +1480,11 @@ def main():
     for raw in args.never_bench or []:
         member_name, _ = resolve_manager(raw)
         never_bench_names.add(member_name)
+
+    force_striker_names = set()
+    for raw in args.force_strikers or []:
+        member_name, _ = resolve_manager(raw)
+        force_striker_names.add(member_name)
 
     points = ep_next_points(players)
     projections_path = Path(args.projections) if args.projections else find_solio_csv()
@@ -1734,7 +1779,8 @@ def main():
         print(f"  {name} (GW{gw_used} squad, {tag}): projected {score}{wc_tag}")
         scores.append((name, score))
 
-    suggest_lineup(scores, fh_names, ceiling, args.ceiling_weight, never_bench_names)
+    suggest_lineup(scores, fh_names, ceiling, args.ceiling_weight, never_bench_names,
+                   force_striker_names)
 
 
 if __name__ == "__main__":
