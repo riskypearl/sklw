@@ -930,7 +930,9 @@ def record_transfer(overrides_path: Path, bootstrap: dict, manager_name: str,
         sys.exit(1)
 
     all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
-    entry = all_overrides.setdefault(str(manager_id), {"out": [], "in": []})
+    entry = all_overrides.setdefault(str(manager_id), {})
+    entry.setdefault("out", [])
+    entry.setdefault("in", [])
     existing_pairs = list(zip(entry["out"], entry["in"]))
 
     players = player_lookup(bootstrap)
@@ -1211,6 +1213,14 @@ def main():
     ap.add_argument("--in", dest="in_", help="comma-separated player name "
                                    "fragment(s) being transferred in, same "
                                    "order as --out (with --transfer)")
+    ap.add_argument("--clear-transfers", metavar="MANAGER_NAME",
+                     help="wipe this club member's recorded out/in transfer "
+                          "pairs from overrides.json (e.g. once a prior "
+                          "week's recorded transfer is already reflected in "
+                          "their real FPL squad and shouldn't keep being "
+                          "re-applied on top of it). Leaves any Wildcard/TC/"
+                          "manual-score entry for them untouched -- clear "
+                          "those by hand in overrides.json if needed.")
     ap.add_argument("--wildcard", metavar="MANAGER_NAME",
                      help="record a Wildcard squad for this club member --"
                           " replaces their ENTIRE squad (unlike --transfer's "
@@ -1395,6 +1405,21 @@ def main():
         for p in matches[:25]:
             print(f"  {p['id']:>6}  {p['first_name']} {p['second_name']} "
                   f"({p['team']}) ep_next={p.get('ep_next')}")
+        return
+
+    if args.clear_transfers:
+        member_name, mid = resolve_manager(args.clear_transfers)
+        overrides_path = Path(args.overrides)
+        all_overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {}
+        entry = all_overrides.get(str(mid))
+        if not entry or not (entry.get("out") or entry.get("in")):
+            print(f"{member_name} has no recorded out/in transfers -- nothing to clear.")
+            return
+        cleared = len(entry.get("out", []))
+        entry["out"] = []
+        entry["in"] = []
+        overrides_path.write_text(json.dumps(all_overrides, indent=2))
+        print(f"Cleared {cleared} transfer pair(s) for {member_name}.")
         return
 
     if args.transfer:
